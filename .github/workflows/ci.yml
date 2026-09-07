@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor (PEP 604 unions in annotations); 3.13 catches
+        # what is coming.
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: mypy src
+      - run: pytest -q
+
+  # The unit suite stubs the transport, so it cannot see the SDK drifting from
+  # the services it wraps. This can. It needs a live install, so it only runs
+  # where the secret exists — never on a fork's pull request.
+  live:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - name: Integration tests
+        env:
+          EXPERTS_BASE_URL: ${{ secrets.EXPERTS_BASE_URL }}
+          EXPERTS_TEST_KEY: ${{ secrets.EXPERTS_TEST_KEY }}
+        run: |
+          if [ -z "$EXPERTS_TEST_KEY" ]; then
+            echo "::notice::No EXPERTS_TEST_KEY configured; skipping live tests."
+            exit 0
+          fi
+          pytest tests/live -q

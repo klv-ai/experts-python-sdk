@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      # PyPI trusted publishing: PyPI verifies this workflow's OIDC identity
+      # instead of us storing a long-lived API token. Same purpose as npm
+      # provenance on the Node SDK.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev]" build
+      - run: ruff check src tests
+      - run: mypy src
+      - run: pytest -q
+      - name: Check the tag matches the package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag $TAG does not match pyproject version $PKG" >&2
+            exit 1
+          fi
+          # __version__ is what a user prints at runtime; a disagreement there
+          # is how a bug report ends up naming the wrong release.
+          MOD=$(python -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('src/klavi_experts/__init__.py').read_text()).group(1))")
+          if [ "$TAG" != "$MOD" ]; then
+            echo "Tag $TAG does not match __version__ $MOD" >&2
+            exit 1
+          fi
+      - run: python -m build
+      - uses: pypa/gh-action-pypi-publish@release/v1

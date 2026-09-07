@@ -1,0 +1,66 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "klavi-experts"
+version = "0.1.0"
+description = "Official Python SDK for the Klavi Experts API — conversations, streaming, experts, and knowledge."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Klavi AI" }]
+keywords = ["klavi", "experts", "ai", "llm", "rag", "chatbot", "sdk"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+
+# httpx alone, because it is the one library that gives sync AND async with the
+# same API and real streaming on both. Everything else here is standard library.
+dependencies = ["httpx>=0.27,<1"]
+
+[project.urls]
+Homepage = "https://github.com/klv-ai/experts-python-sdk"
+Repository = "https://github.com/klv-ai/experts-python-sdk"
+Issues = "https://github.com/klv-ai/experts-python-sdk/issues"
+Changelog = "https://github.com/klv-ai/experts-python-sdk/releases"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "respx>=0.21",
+  "ruff>=0.8",
+  "mypy>=1.13",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/klavi_experts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The live suite needs a running install and a real key; it is opt-in.
+addopts = "--ignore=tests/live"
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unreachable = true

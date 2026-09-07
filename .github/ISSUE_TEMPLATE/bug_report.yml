@@ -1,0 +1,38 @@
+name: Bug report
+description: Something the SDK does wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest snippet that shows it. Redact your API key.
+      render: python
+    validations: { required: true }
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: SDK version, Python version, and the install's build pack version.
+      placeholder: "klavi-experts 0.1.0, Python 3.12, pack 1.0.49"
+    validations: { required: true }
+  - type: dropdown
+    id: client
+    attributes:
+      label: Which client
+      options: [ExpertsClient (sync), AsyncExpertsClient (async), both]
+    validations: { required: true }
+  - type: textarea
+    id: raw
+    attributes:
+      label: Raw request and response
+      description: >
+        If the API itself looks wrong, paste the request and response. Some
+        problems are fixed on the server rather than in the SDK, and this is
+        how we tell which.
