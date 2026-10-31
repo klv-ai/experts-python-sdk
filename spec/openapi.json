@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Klavi Experts API",
-    "version": "1.0.49",
-    "description": "The HTTP API of a Klavi Experts installation.\n\n## Authentication\n\nSend your API key as `Authorization: Bearer sk-...`. `X-API-Key: sk-...` is\nalso accepted, but send exactly ONE of them \u2014 the gateway checks\n`Authorization` first and that check is terminal, so a stale bearer token\ndecides the request even when a valid key is present in the other header.\n\nA key is a full user identity on the install. It belongs on a server. For\nanything browser-facing, mint a session token with\n`POST /api/v1/public/sessions`.\n\n## Streaming\n\n`POST /api/v1/conversations/chat` returns `application/x-ndjson` over plain\nHTTP \u2014 one JSON object per line, terminated by one carrying `done: true`. No\nWebSocket is required.\n\nTwo things about it surprise people:\n\n* **Sending a message is three calls.** `/chat` never CREATES message rows; it\n  updates one you make first. Create the user's turn and an assistant\n  placeholder with `POST /api/v1/responses/`, then pass the placeholder's uid\n  as `response`. Omit it and the model still answers, but nothing persists.\n* **HTTP 200 is not proof of an answer.** Generation reports its own failures\n  in the terminal event's `error` field, not in the status code.\n\nDurations in the terminal event are NANOSECONDS.\n\n## Errors\n\n`403` with `{\"error\": \"license_expired\"}` is an installation-level failure,\nnot a permission problem: nothing about the request is wrong, and only the\ninstall's administrator can resolve it.\n",
+    "version": "1.1.0",
+    "description": "The HTTP API of a Klavi Experts installation.\n\n## Authentication\n\nSend your API key as `Authorization: Bearer sk-...`. `X-API-Key: sk-...` is\nalso accepted, but send exactly ONE of them \u2014 the gateway checks\n`Authorization` first and that check is terminal, so a stale bearer token\ndecides the request even when a valid key is present in the other header.\n\nA key is a full user identity on the install. It belongs on a server. For\nanything browser-facing, mint a session token with\n`POST /api/v1/public/sessions`.\n\n## Streaming\n\n`POST /api/v1/conversations/chat` returns `application/x-ndjson` over plain\nHTTP \u2014 one JSON object per line, terminated by one carrying `done: true`. No\nWebSocket is required.\n\nTwo things about it surprise people:\n\n* **Sending a message is three calls.** `/chat` never CREATES message rows; it\n  updates one you make first. Create the user's turn and an assistant\n  placeholder with `POST /api/v1/responses/`, then pass the placeholder's uid\n  as `response`. Omit it and the model still answers, but nothing persists.\n* **HTTP 200 is not proof of an answer.** Generation reports its own failures\n  in the terminal event's `error` field, not in the status code.\n\nDurations in the terminal event are NANOSECONDS.\n\n## Errors\n\n`403` with `{\"error\": \"license_expired\"}` is an installation-level failure,\nnot a permission problem: nothing about the request is wrong, and only the\ninstall's administrator can resolve it.\n\nFor 30 days after a licence expires the install is read-only rather than\ndark: GET and HEAD are served, and every other method answers `403` with\n`{\"error\": \"license_expired_readonly\"}`. That includes the reads sent as a\nPOST: a chat turn and `/api/v1/similarity_search/`.\n\n`403` with `{\"detail\": {\"reason\": \"expert_not_available\"}}` from `/chat` means\nthe caller may not use that expert (its role, privacy or org profiles). Before\n1.1 the turn silently answered on the site default model instead.\n",
     "license": {
       "name": "Proprietary"
     }
@@ -38,6 +38,35 @@
       }
     },
     "schemas": {
+      "AccessFailedRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "reason"
+        ],
+        "title": "AccessFailedRequest"
+      },
       "AddDocumentToCollectionResponse": {
         "properties": {
           "timestamp": {
@@ -67,6 +96,45 @@
         ],
         "title": "AddDocumentToCollectionResponse",
         "description": "Returns the UUID of the newly created document collection link row"
+      },
+      "AdminNotice": {
+        "properties": {
+          "task": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Task"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "in-progress",
+              "completed"
+            ],
+            "title": "Stage"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Message"
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^/[A-Za-z0-9/_-]*$",
+            "title": "Path",
+            "default": "/"
+          }
+        },
+        "type": "object",
+        "required": [
+          "task",
+          "stage",
+          "message"
+        ],
+        "title": "AdminNotice"
       },
       "AdoptContextRequest": {
         "properties": {
@@ -692,6 +760,123 @@
         ],
         "title": "Body_job_queue_file_upload_api_v1_documents_upload_post"
       },
+      "Body_job_queue_upload_complete_api_v1_documents_job_queue_upload_complete_post": {
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "title": "Upload Id"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "ml_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ml Model Name"
+          },
+          "split_strategy_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split Strategy Id"
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection"
+          },
+          "auto_create_collection": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auto Create Collection"
+          },
+          "min_role_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Role Id"
+          },
+          "job_queue_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Queue Run Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload_id",
+          "total",
+          "file_name"
+        ],
+        "title": "Body_job_queue_upload_complete_api_v1_documents_job_queue_upload_complete_post"
+      },
+      "Body_patch_api_v1_styles_decks_patch_post": {
+        "properties": {
+          "base": {
+            "type": "string",
+            "format": "binary",
+            "title": "Base"
+          },
+          "deck": {
+            "type": "string",
+            "title": "Deck"
+          },
+          "images": {
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "type": "array",
+            "title": "Images",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "base",
+          "deck"
+        ],
+        "title": "Body_patch_api_v1_styles_decks_patch_post"
+      },
       "Body_replace_document_content_api_v1_documents__document_uid__replace_content_post": {
         "properties": {
           "file": {
@@ -746,6 +931,49 @@
         ],
         "title": "Body_update_document_collection_role_api_v1_documents_collection__collection_uid___document_uid__role_patch"
       },
+      "Body_upload_api_v1_styles_templates_upload_post": {
+        "properties": {
+          "style_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Style Uid"
+          },
+          "doc_type": {
+            "type": "string",
+            "enum": [
+              "general",
+              "proposal",
+              "report",
+              "letter",
+              "presentation"
+            ],
+            "title": "Doc Type",
+            "default": "general"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "style_uid",
+          "file"
+        ],
+        "title": "Body_upload_api_v1_styles_templates_upload_post"
+      },
       "Body_upload_files_api_v1_documents_app_post": {
         "properties": {
           "files": {
@@ -794,6 +1022,36 @@
         ],
         "title": "Body_upload_images_batch_api_v1_conversations_images_upload_batch_post"
       },
+      "Body_upload_logo_api_v1_styles_families__style_uid__logos_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "on_dark",
+                  "mark"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_logo_api_v1_styles_families__style_uid__logos_upload_post"
+      },
       "Body_upload_pack_api_v1_language_packs_upload_post": {
         "properties": {
           "file": {
@@ -807,6 +1065,108 @@
           "file"
         ],
         "title": "Body_upload_pack_api_v1_language_packs_upload_post"
+      },
+      "Body_upload_part_api_v1_documents_upload_part_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          },
+          "upload_id": {
+            "type": "string",
+            "title": "Upload Id"
+          },
+          "index": {
+            "type": "integer",
+            "title": "Index"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "upload_id",
+          "index",
+          "total"
+        ],
+        "title": "Body_upload_part_api_v1_documents_upload_part_post"
+      },
+      "Box": {
+        "properties": {
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "w": {
+            "type": "number",
+            "title": "W"
+          },
+          "h": {
+            "type": "number",
+            "title": "H"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x",
+          "y",
+          "w",
+          "h"
+        ],
+        "title": "Box"
+      },
+      "BuildRequest": {
+        "properties": {
+          "deck": {
+            "$ref": "#/components/schemas/Deck"
+          },
+          "template_uid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Uid"
+          },
+          "org_profile_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Org Profile Id"
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Values",
+            "default": {}
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "deck"
+        ],
+        "title": "BuildRequest"
       },
       "BulkDeleteRequest": {
         "properties": {
@@ -1160,6 +1520,16 @@
               }
             ],
             "title": "Contextrule"
+          },
+          "sheet": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SheetEditContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -1269,6 +1639,21 @@
             "type": "boolean",
             "title": "Mcp Banned",
             "default": false
+          },
+          "scope_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Uids"
           }
         },
         "type": "object",
@@ -1897,6 +2282,21 @@
             "type": "boolean",
             "title": "Is Public",
             "default": true
+          },
+          "scope_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Uids"
           }
         },
         "type": "object",
@@ -1906,6 +2306,58 @@
         ],
         "title": "CreateSmartCollectionRequest",
         "description": "Request to create a new smart collection watching a filesystem path."
+      },
+      "Deck": {
+        "properties": {
+          "width_emu": {
+            "type": "integer",
+            "title": "Width Emu"
+          },
+          "height_emu": {
+            "type": "integer",
+            "title": "Height Emu"
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme"
+          },
+          "slides": {
+            "items": {
+              "$ref": "#/components/schemas/Slide"
+            },
+            "type": "array",
+            "title": "Slides"
+          },
+          "presets": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/Slot"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Presets"
+          },
+          "preset_layouts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Preset Layouts"
+          },
+          "layout_art": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Layout Art"
+          }
+        },
+        "type": "object",
+        "required": [
+          "width_emu",
+          "height_emu"
+        ],
+        "title": "Deck"
       },
       "DedupResult": {
         "type": "string",
@@ -1940,6 +2392,77 @@
           "collection_uid"
         ],
         "title": "DeleteCollectionResponse"
+      },
+      "DirectoryAccessRemoveRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "actorUid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actoruid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "DirectoryAccessRemoveRequest"
+      },
+      "DirectoryAccessRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "credentialEnc": {
+            "type": "string",
+            "title": "Credentialenc"
+          },
+          "account": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account"
+          },
+          "canReadUsers": {
+            "type": "boolean",
+            "title": "Canreadusers",
+            "default": false
+          },
+          "actorUid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actoruid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "credentialEnc"
+        ],
+        "title": "DirectoryAccessRequest"
       },
       "DirectoryItem": {
         "properties": {
@@ -2029,6 +2552,68 @@
         "title": "DirectoryListingResponse",
         "description": "Response containing a directory listing for the filesystem browser."
       },
+      "DiscoverRequest": {
+        "properties": {
+          "collection_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Uids"
+          },
+          "brands": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "type": "array",
+                "maxItems": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brands"
+          },
+          "use_org_profiles": {
+            "type": "boolean",
+            "title": "Use Org Profiles",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DiscoverRequest"
+      },
+      "DismissRequest": {
+        "properties": {
+          "uids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 1000,
+            "title": "Uids"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "uids"
+        ],
+        "title": "DismissRequest"
+      },
       "DocUploadFlavorId": {
         "type": "integer",
         "enum": [
@@ -2061,6 +2646,16 @@
             "type": "boolean",
             "title": "File Available",
             "default": false
+          },
+          "original": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OriginalStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "splits": {
             "items": {
@@ -2847,6 +3442,41 @@
               }
             ],
             "title": "Metadata Json"
+          },
+          "kind": {
+            "type": "string",
+            "maxLength": 16,
+            "title": "Kind",
+            "default": "manual"
+          },
+          "status": {
+            "type": "string",
+            "maxLength": 16,
+            "title": "Status",
+            "default": "active"
+          },
+          "brand_kit": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand Kit"
+          },
+          "org_profile_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Org Profile Id"
           }
         },
         "type": "object",
@@ -3182,6 +3812,67 @@
         "type": "object",
         "title": "ExecRequest"
       },
+      "FamilyPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "archived"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "org_profile_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Org Profile Id"
+          },
+          "clear_org_profile": {
+            "type": "boolean",
+            "title": "Clear Org Profile",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FamilyPatch"
+      },
       "FolderCreateRequest": {
         "properties": {
           "name": {
@@ -3232,6 +3923,93 @@
           "email"
         ],
         "title": "ForgotPasswordRequest"
+      },
+      "FromDocumentRequest": {
+        "properties": {
+          "style_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Style Uid"
+          },
+          "document_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Document Uid"
+          },
+          "doc_type": {
+            "type": "string",
+            "enum": [
+              "general",
+              "proposal",
+              "report",
+              "letter",
+              "presentation"
+            ],
+            "title": "Doc Type",
+            "default": "general"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "style_uid",
+          "document_uid"
+        ],
+        "title": "FromDocumentRequest"
+      },
+      "GenerateRequest": {
+        "properties": {
+          "style_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Style Uid"
+          },
+          "doc_type": {
+            "type": "string",
+            "enum": [
+              "general",
+              "proposal",
+              "report",
+              "letter",
+              "presentation"
+            ],
+            "title": "Doc Type",
+            "default": "general"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "assist": {
+            "type": "boolean",
+            "title": "Assist",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "style_uid"
+        ],
+        "title": "GenerateRequest"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3978,6 +4756,47 @@
         ],
         "title": "LoginRequest"
       },
+      "LogoSelection": {
+        "properties": {
+          "primary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary"
+          },
+          "on_dark": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Dark"
+          },
+          "mark": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mark"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "LogoSelection",
+        "description": "Only the roles present are changed: a candidate's sha, 'none' for no\nlogo in that role, or null to clear the choice (back to the guess)."
+      },
       "MaintenanceRequest": {
         "properties": {
           "run_id": {
@@ -4005,6 +4824,20 @@
         },
         "type": "object",
         "title": "MaintenanceRequest"
+      },
+      "ManualMember": {
+        "properties": {
+          "userUid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Useruid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "userUid"
+        ],
+        "title": "ManualMember"
       },
       "McpCollectionUpdate": {
         "properties": {
@@ -4034,6 +4867,43 @@
         "type": "object",
         "title": "McpCollectionUpdate",
         "description": "Partial by design \u2014 send only what's changing (the ban toggle, the role,\nor both). Omitted fields are left untouched."
+      },
+      "MembershipRequest": {
+        "properties": {
+          "add": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Add"
+          },
+          "remove": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remove"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "MembershipRequest"
       },
       "MemoryCreateRequest": {
         "properties": {
@@ -4107,6 +4977,176 @@
         },
         "type": "object",
         "title": "MemorySettingsUpdateRequest"
+      },
+      "OriginalStatus": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "here",
+              "elsewhere",
+              "fetching",
+              "failed",
+              "missing"
+            ],
+            "title": "State"
+          },
+          "phase": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phase"
+          },
+          "controller": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Controller"
+          },
+          "holder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Holder"
+          },
+          "bytes": {
+            "type": "integer",
+            "title": "Bytes",
+            "default": 0
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state"
+        ],
+        "title": "OriginalStatus",
+        "description": "Where a document's original is (experts-mesh \u00a79a): `here`; `elsewhere`, on\nanother member of the mesh, which this install can fetch; `fetching`;\n`failed`, the last fetch (code: unreachable when no controller could be\nasked, not_found when none found a member holding it); or `missing`.\nWhile fetching: `phase` (asking, waiting, pulling \u2014 the controller gets it\nfrom `holder` first \u2014 or receiving from `controller`), and `bytes` of\n`total` in that phase. Members are named as the mesh names them."
+      },
+      "Paragraph": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/Run"
+            },
+            "type": "array",
+            "title": "Runs"
+          },
+          "level": {
+            "type": "integer",
+            "title": "Level",
+            "default": 0
+          },
+          "bullet": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "bullet",
+                  "number"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bullet"
+          },
+          "align": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "center",
+                  "right",
+                  "justify"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Align"
+          },
+          "space_before": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Before"
+          },
+          "space_after": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space After"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          }
+        },
+        "type": "object",
+        "title": "Paragraph"
       },
       "PartialCollection": {
         "properties": {
@@ -4221,6 +5261,21 @@
               }
             ],
             "title": "Mcp Banned"
+          },
+          "scope_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Uids"
           }
         },
         "additionalProperties": false,
@@ -4595,6 +5650,29 @@
             ],
             "title": "Llmbackendid"
           },
+          "llmBackendUid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llmbackenduid"
+          },
+          "meshFallback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meshfallback"
+          },
           "modelFile": {
             "anyOf": [
               {
@@ -4675,7 +5753,8 @@
           "orgProfileId": {
             "anyOf": [
               {
-                "type": "integer"
+                "type": "string",
+                "format": "uuid"
               },
               {
                 "type": "null"
@@ -4737,6 +5816,20 @@
             "type": "boolean",
             "title": "Private",
             "default": false
+          },
+          "scopeUids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopeuids"
           }
         },
         "type": "object",
@@ -4806,6 +5899,17 @@
               }
             ],
             "title": "Transcript"
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Format"
           }
         },
         "type": "object",
@@ -4897,6 +6001,31 @@
           "model"
         ],
         "title": "QueuePullRequest"
+      },
+      "RenderRequest": {
+        "properties": {
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Values",
+            "default": {}
+          },
+          "starter": {
+            "type": "boolean",
+            "title": "Starter",
+            "default": false
+          },
+          "prompts": {
+            "type": "boolean",
+            "title": "Prompts",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RenderRequest"
       },
       "RerankStrategy": {
         "type": "string",
@@ -5175,6 +6304,71 @@
         ],
         "title": "ResponseVoteRequest"
       },
+      "ReverifyApplyRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ReverifyResult"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "ReverifyApplyRequest"
+      },
+      "ReverifyResult": {
+        "properties": {
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "tenantId": {
+            "type": "string",
+            "title": "Tenantid"
+          },
+          "outcome": {
+            "type": "string",
+            "title": "Outcome"
+          },
+          "refreshTokenEnc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshtokenenc"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subject",
+          "tenantId",
+          "outcome"
+        ],
+        "title": "ReverifyResult"
+      },
       "RoomRequest": {
         "properties": {
           "text": {
@@ -5210,6 +6404,105 @@
           "text"
         ],
         "title": "RoomRequest"
+      },
+      "Run": {
+        "properties": {
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "b": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "B"
+          },
+          "i": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "I"
+          },
+          "u": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "U"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Font"
+          },
+          "spacing": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spacing"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          }
+        },
+        "type": "object",
+        "title": "Run"
       },
       "SemanticDocumentSearchRequest": {
         "properties": {
@@ -5494,6 +6787,21 @@
         "title": "SemanticSearchDocumentItem",
         "description": "A SourceDocument enriched with relevance score and best matching text split."
       },
+      "SheetEditContext": {
+        "properties": {
+          "sheets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Sheets"
+          }
+        },
+        "type": "object",
+        "title": "SheetEditContext",
+        "description": "Sent by the CopyWrite sheet editor's Ask panel: the open workbook's\ntabs. With it \u2014 and the tabular feature, and the sheet's dataset attached\nby its hash \u2014 the expert gets sheet_write to propose edits to the sheet."
+      },
       "SimilarityDistanceCTXResult": {
         "properties": {
           "group_key": {
@@ -5639,6 +6947,28 @@
               }
             ],
             "title": "Source Location"
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ms"
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ms"
           },
           "match_source": {
             "type": "string",
@@ -6153,6 +7483,396 @@
         "title": "SimilaritySearchTextsResponse",
         "description": "A list of similarity search results"
       },
+      "Slide": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "dup_of": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dup Of"
+          },
+          "layout": {
+            "type": "string",
+            "title": "Layout",
+            "default": "custom"
+          },
+          "layout_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Name"
+          },
+          "art": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Art"
+          },
+          "slots": {
+            "items": {
+              "$ref": "#/components/schemas/Slot"
+            },
+            "type": "array",
+            "title": "Slots"
+          },
+          "notes": {
+            "items": {
+              "$ref": "#/components/schemas/Paragraph"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "notes_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes Hash"
+          },
+          "design": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Design"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "title": "Slide"
+      },
+      "Slot": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "title",
+              "subtitle",
+              "body",
+              "text",
+              "quote",
+              "caption",
+              "image",
+              "notes",
+              "kicker",
+              "statement",
+              "subtext",
+              "panel"
+            ],
+            "title": "Role",
+            "default": "text"
+          },
+          "shape_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape Id"
+          },
+          "box": {
+            "$ref": "#/components/schemas/Box"
+          },
+          "style": {
+            "$ref": "#/components/schemas/SlotStyle"
+          },
+          "paragraphs": {
+            "items": {
+              "$ref": "#/components/schemas/Paragraph"
+            },
+            "type": "array",
+            "title": "Paragraphs"
+          },
+          "markdown": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Markdown"
+          },
+          "image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "orig_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orig Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "box"
+        ],
+        "title": "Slot"
+      },
+      "SlotStyle": {
+        "properties": {
+          "font": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Font"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "bold": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bold"
+          },
+          "italic": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Italic"
+          },
+          "caps": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caps"
+          },
+          "align": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "left",
+                  "center",
+                  "right",
+                  "justify"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Align"
+          },
+          "anchor": {
+            "type": "string",
+            "enum": [
+              "top",
+              "middle",
+              "bottom"
+            ],
+            "title": "Anchor",
+            "default": "top"
+          },
+          "insets": {
+            "anyOf": [
+              {
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array",
+                "maxItems": 4,
+                "minItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insets"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "font_scale": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Font Scale"
+          },
+          "bullet": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "bullet",
+                  "number"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Bullet"
+          },
+          "fill": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fill"
+          },
+          "shape": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "rect",
+                  "round"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shape"
+          }
+        },
+        "type": "object",
+        "title": "SlotStyle",
+        "description": "What the slot's text looks like when a run says nothing \u2014 resolved\nthrough the pptx inheritance chain at import, so the editor renders it\nwithout knowing about masters and layouts."
+      },
       "SmartCollectionItemResponse": {
         "properties": {
           "timestamp": {
@@ -6329,6 +8049,21 @@
             ],
             "title": "Last Error"
           },
+          "scope_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Uids"
+          },
           "name": {
             "anyOf": [
               {
@@ -6488,6 +8223,17 @@
               }
             ],
             "title": "Summary"
+          },
+          "storage_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Storage Key"
           }
         },
         "type": "object",
@@ -6499,6 +8245,114 @@
         ],
         "title": "SourceDocument",
         "description": "Table that represents an uploaded document. `doc_uri` specifies a local (or\nremote) location for a doc, `source` is a string that specfies where the doc\noriginated. Usually NULL but could be the url of a document sourced via a\nweb-search to ensure we capture where it has originated from for citation."
+      },
+      "SsoCompleteRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "tenantId": {
+            "type": "string",
+            "title": "Tenantid"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "upn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upn"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "groupsOverage": {
+            "type": "boolean",
+            "title": "Groupsoverage",
+            "default": false
+          },
+          "hostedDomain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hosteddomain"
+          },
+          "ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip"
+          },
+          "refreshTokenEnc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshtokenenc"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "tenantId",
+          "subject"
+        ],
+        "title": "SsoCompleteRequest"
       },
       "StringListResponse": {
         "properties": {
@@ -6633,6 +8487,140 @@
         "title": "StyleListResponse",
         "description": "A list of DocumentStyle objects"
       },
+      "SyncApplyRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "trigger": {
+            "type": "string",
+            "title": "Trigger",
+            "default": "schedule"
+          },
+          "actorUid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actoruid"
+          },
+          "force": {
+            "type": "boolean",
+            "title": "Force",
+            "default": false
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SyncResultItem"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "errorDetail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Errordetail"
+          },
+          "secretExpiresAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secretexpiresat"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "SyncApplyRequest"
+      },
+      "SyncPlanRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider"
+        ],
+        "title": "SyncPlanRequest"
+      },
+      "SyncResultItem": {
+        "properties": {
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "default": "unknown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subject"
+        ],
+        "title": "SyncResultItem"
+      },
       "SystemEmailTestRequest": {
         "properties": {
           "to": {
@@ -6643,6 +8631,64 @@
         },
         "type": "object",
         "title": "SystemEmailTestRequest"
+      },
+      "TemplatePatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "general",
+                  "proposal",
+                  "report",
+                  "letter",
+                  "presentation"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "spec": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spec"
+          },
+          "is_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Default"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TemplatePatch"
       },
       "TextClusterItem": {
         "properties": {
@@ -7073,6 +9119,39 @@
           "split_text": {
             "type": "string",
             "title": "Split Text"
+          },
+          "start_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Ms"
+          },
+          "end_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Ms"
+          },
+          "original_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Text"
           }
         },
         "type": "object",
@@ -7083,6 +9162,26 @@
         ],
         "title": "TextSplitItem",
         "description": "Structured text split for the document viewer."
+      },
+      "Theme": {
+        "properties": {
+          "colors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Colors"
+          },
+          "fonts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fonts"
+          }
+        },
+        "type": "object",
+        "title": "Theme"
       },
       "TwoFactorEnrollVerifyRequest": {
         "properties": {
@@ -7201,6 +9300,21 @@
               }
             ],
             "title": "Description"
+          },
+          "scope_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Uids"
           }
         },
         "type": "object",
@@ -7335,6 +9449,42 @@
         },
         "type": "object",
         "title": "ValidityCheckRequest"
+      },
+      "VisibilityBody": {
+        "properties": {
+          "visibleTo": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visibleto"
+          },
+          "sees": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sees"
+          }
+        },
+        "type": "object",
+        "title": "VisibilityBody"
       },
       "WebhookRequest": {
         "properties": {
@@ -8359,6 +10509,327 @@
         }
       }
     },
+    "/api/v1/documents/job-queue-status/{run_id}": {
+      "get": {
+        "tags": [
+          "Documents",
+          "Files"
+        ],
+        "summary": "Job Queue Status",
+        "description": "Returns the current state of a job queue run plus a BOUNDED page of its\nqueue entries. Used by the frontend to poll for status when the socket\nmay have missed messages (e.g. fast dedup processing that completes\nbefore socket connects) and for the upload modal's initial state.\n\nPreviously returned jqr.toDict \u2014 the run with EVERY queue row \u2014 which\nis O(run size) (6.9 MB on a 47k-file run). A parameterless call now\nreturns the first 1000 rows in the same shape, plus `queue_total` and\n`has_more` for callers that need the rest.",
+        "operationId": "job_queue_status_api_v1_documents_job_queue_status__run_id__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 5000,
+              "minimum": 1,
+              "default": 1000,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional filter: 'unfinished' returns only pending/working/embeddingComplete rows.",
+              "title": "Status"
+            },
+            "description": "Optional filter: 'unfinished' returns only pending/working/embeddingComplete rows."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/documents/job-queue-upload": {
+      "post": {
+        "tags": [
+          "Documents",
+          "Files"
+        ],
+        "summary": "Job Queue File Upload",
+        "description": "#### Introduction.\nPOST receptor for a front-end HTML form:file upload component that sends\nit's data in `multipart/form-data` format. Not suitable for large scale bulk\nuploads, since each file needs storing in the webserver before being processed.\nPrefer to use `api/v*/upload` with a list of files/folders in that case. All\nfiles in upload will have their `min_role_id` set to the value passed in the\nrequest or the user's role otherwise.\n\n\n\n#### Document-collection handling.\nFiles uploaded to this endpoint will be added to a collection if one is specified.\nIf you pass a UUID to the `collection` param and the collection doesn't exist,\n \nthe upload will fail. You should create the collection first by POSTing to the `api/v*/collections` endpoint.\n \nIf you specify a name for the collection, you can only add documents to a\ncollection where you are already the owner or the upload will fail. If a\ncollection with the name doesn't exist one will be created if the\n`auto_create_collection` parameter is supplied and True, otherwise the\nupload will fail.\n\n\n\n#### Returns.\nThe number of items being processed and the JobQueueRunId. Open a websocket at\n`/api/v*/progress/{job queue id}` to receive status updates.",
+        "operationId": "job_queue_file_upload_api_v1_documents_job_queue_upload_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_job_queue_file_upload_api_v1_documents_job_queue_upload_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobQueueTaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/documents/{document_uid}": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "Get Single Document",
+        "description": "Returns the Document object specified by the UUID with an array of text\nsplits populated if the `splits` query parameter is supplied and True.\nIf `splits` is not supplied or false, the splits param in the return\nstructure will be an empty array. If `splits` is supplied and True, the\ncaller can choose to reflow the unsplit texts such that each sentence is\n[approx] the same length.\n\n#### Raises:\n- 404 if a document with the specified UUID was not found\n- 401 if the user doesn't have sufficent permissions",
+        "operationId": "get_single_document_api_v1_documents__document_uid__get",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_uid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Uid"
+            }
+          },
+          {
+            "name": "with_splits",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "With Splits"
+            }
+          },
+          {
+            "name": "reflow_splits",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reflow Splits"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocWithSplitTextsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "Update Document",
+        "description": "Update an existing document. Returns the newly updated Document if\nsuccessful, raises otherwise:\n- 422-Unprocessable entity if the entity is not updatedable\n- 404-Not found if the specified resource wasn't found [in the db]",
+        "operationId": "update_document_api_v1_documents__document_uid__patch",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_uid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Uid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartialDocument"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentItemResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "Delete Document",
+        "description": "Delete the specified resource. Returns 204-No Content if successful, raises\notherwise:\n- 500-Internal server error if the DB failed to update\n- 404-Not found if the specified resource wasn't found [in the db]",
+        "operationId": "delete_document_api_v1_documents__document_uid__delete",
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_uid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Document Uid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackgroundTaskResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/llm/exec": {
       "post": {
         "tags": [
@@ -8409,7 +10880,7 @@
           "Profiles"
         ],
         "summary": "List Profiles",
-        "description": "List the model profiles this user may see.\n\nVisibility is `_visible_to` \u2014 see it for the rule. In short: a user sees\nshared experts at or below their role, plus everything they own; admins\nsee the whole shared surface; nobody but the owner sees an owner-only\n(\"Only me\") expert. The chat expert-picker reads the same list, so this\nis also what scopes which experts a user can chat with \u2014 if none are\nvisible the client falls back to the site default model.",
+        "description": "List the model profiles this user may see \u2014 expert_access has the\nrule (role floor, \"Only me\", org-profile limits, chatbox sessions,\nservices acting for someone). The chat expert-picker reads the same list,\nand chat refuses an expert that isn't in it. An expert's instructions and\ntools are left out for anyone who can't manage it.",
         "operationId": "list_profiles_api_v1_profiles__get",
         "responses": {
           "200": {
@@ -8788,6 +11259,53 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/similarity_search/": {
+      "post": {
+        "tags": [
+          "RAG"
+        ],
+        "summary": "Similiarity Search",
+        "description": "Run a similarity search for the top `k` documents matching the source text.",
+        "operationId": "similiarity_search_api_v1_similarity_search__post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimilaritySearchRAGRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilaritySearchRAGResponse"
+                }
               }
             }
           },

@@ -2,8 +2,8 @@
 
 The distinctions here are the ones a caller has to act on differently, not a
 taxonomy for its own sake. `LicenseError` in particular is not a variety of
-"forbidden": it says the *installation's* licence has lapsed, so no amount of
-fixing the request will help and the person who can fix it is the install's
+"forbidden": it says the *installation's* licence is not valid, so no amount
+of fixing the request will help and the person who can fix it is the install's
 administrator, not whoever is reading the traceback.
 """
 
@@ -53,14 +53,50 @@ class PermissionError_(ExpertsError):
 ExpertsPermissionError = PermissionError_
 
 
+class ExpertNotAvailableError(PermissionError_):
+    """403 ``expert_not_available`` — this credential may not use that expert.
+
+    Raised by a chat turn naming an expert above the caller's role, private to
+    someone else, or limited to org profiles the caller is not in. Before build
+    pack 1.1 the turn answered on the site default model instead, with no
+    persona and no knowledge; now it is refused, and the SDK settles the
+    placeholder message so the conversation does not show it typing forever.
+    """
+
+
 class LicenseError(ExpertsError):
-    """403 with ``{"error": "license_expired"}`` — the INSTALL's licence lapsed.
+    """403 with ``{"error": "license_expired"}`` — the INSTALL's licence is not valid.
 
     Separate from a permission error on purpose. Nothing about the request is
     wrong and no retry or credential change will help; the install's
-    administrator has to renew. Reporting "forbidden" here sends a developer to
+    administrator has to act. Reporting "forbidden" here sends a developer to
     debug their own code for an hour.
+
+    Expiry is the usual cause but not the only one: an install with no key, a
+    server clock set backwards, or one that has not reached Klavi for longer
+    than its licence allows all answer the same way. ``message`` carries the
+    install's own reason.
     """
+
+    #: True when the install still serves reads. See `LicenseReadOnlyError`.
+    read_only: bool = False
+
+
+class LicenseReadOnlyError(LicenseError):
+    """403 with ``{"error": "license_expired_readonly"}`` — a write, refused
+    because the licence lapsed recently.
+
+    For a window after its licence expires (30 days), an install stays
+    read-only rather than going dark: GETs are served, so conversations,
+    experts and knowledge can still be listed, read and exported. Everything
+    else is refused with this, including the calls that read but go out as a
+    POST — sending a message and ``knowledge.search()`` among them.
+
+    A subclass of `LicenseError`, so code that already catches that keeps
+    working. Past the window the install answers `LicenseError` for reads too.
+    """
+
+    read_only = True
 
 
 class NotFoundError(ExpertsError):
@@ -134,6 +170,14 @@ def _message_from(body: Any, status: int) -> tuple[str, str | None]:
         detail = body.get("detail")
         if isinstance(detail, str):
             return detail, None
+        # A structured refusal: {"detail": {"reason": "...", "message": "..."}}
+        if isinstance(detail, dict):
+            reason = detail.get("reason") or detail.get("error")
+            text = detail.get("message") or detail.get("detail") or reason
+            return (
+                str(text or f"Request failed with status {status}"),
+                reason if isinstance(reason, str) else None,
+            )
         if isinstance(detail, list):
             import json
 
@@ -159,12 +203,24 @@ def error_from_response(
     }
 
     if status == 401:
+        # The knowledge service answers "you may not see this document" with
+        # 401, not 403. The credential is fine; the permission is not.
+        if "insufficient permissions" in message.lower():
+            return PermissionError_(message, **common)
         return AuthError(message, **common)
     if status == 403:
+        if code == "expert_not_available":
+            return ExpertNotAvailableError(message, **common)
         # An install-level failure wearing a request-level status code.
+        if code == "license_expired_readonly":
+            return LicenseReadOnlyError(
+                f"{message} (the installation's licence has expired and it is "
+                f"read-only until renewed — reads still work, this write cannot)",
+                **common,
+            )
         if code == "license_expired":
             return LicenseError(
-                f"{message} (the installation's licence has expired — this is not "
+                f"{message} (the installation's licence is not valid — this is not "
                 f"something your request or credentials can fix)",
                 **common,
             )

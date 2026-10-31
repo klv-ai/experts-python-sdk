@@ -11,11 +11,9 @@ Before it works:
 
   1. Register the origin against your API key in the install's admin. That
      registration is also what supplies CORS for the surface.
-  2. Make the expert guest-visible — minimum role Guest, not private. A session
-     token IS a guest, and an expert above that floor resolves to nothing
-     server-side: the chat would answer on the site default model with no
-     persona and no knowledge, silently, with a 200. sessions.create() refuses
-     such an expert and says so.
+  2. Make the expert guest-visible — minimum role Guest, not private, and not
+     limited to org profiles. A session token IS a guest, so sessions.create()
+     refuses any other expert and says so.
 """
 
 from __future__ import annotations

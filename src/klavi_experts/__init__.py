@@ -21,9 +21,11 @@ from .errors import (
     AbortError,
     AuthError,
     BadRequestError,
+    ExpertNotAvailableError,
     ExpertsError,
     ExpertsPermissionError,
     LicenseError,
+    LicenseReadOnlyError,
     NotFoundError,
     RateLimitError,
     ServerError,
@@ -41,14 +43,21 @@ from .types import (
     Expert,
     KeepaliveEvent,
     KnowledgeDocument,
+    MeshFallback,
     Message,
+    QueuedEvent,
+    SearchHit,
+    ServedBy,
     SourceDocument,
     ThinkingEvent,
     TokenEvent,
+    UploadedFile,
+    UploadJob,
+    UploadStatus,
     Usage,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # Grouped by what a reader is looking for — clients, then errors, then wire
 # types — rather than alphabetised. RUF022 wants the latter; the grouping
@@ -67,7 +76,9 @@ __all__ = [  # noqa: RUF022
     "ExpertsError",
     "AuthError",
     "ExpertsPermissionError",
+    "ExpertNotAvailableError",
     "LicenseError",
+    "LicenseReadOnlyError",
     "NotFoundError",
     "RateLimitError",
     "ServerError",
@@ -87,9 +98,16 @@ __all__ = [  # noqa: RUF022
     "ThinkingEvent",
     "ActionEvent",
     "KeepaliveEvent",
+    "QueuedEvent",
     "DoneEvent",
+    "ServedBy",
+    "MeshFallback",
     "Collection",
     "KnowledgeDocument",
+    "SearchHit",
+    "UploadJob",
+    "UploadStatus",
+    "UploadedFile",
     "BrowserSession",
     "__version__",
 ]

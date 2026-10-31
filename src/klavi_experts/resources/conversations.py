@@ -170,6 +170,24 @@ def cancel_request(response_uid: str) -> Request:
     )
 
 
+def was_cancelled(raw: Any) -> bool:
+    """The cancel endpoint's ``{"cancelled": bool}``.
+
+    False when there was nothing running to stop — already finished, or
+    running in another conversations process than the one asked.
+    """
+    return isinstance(raw, dict) and raw.get("cancelled") is True
+
+
+def settle_request(response_uid: str, error: str) -> Request:
+    """Mark a placeholder finished, with the reason it never got an answer."""
+    return Request(
+        method="PUT",
+        path="/api/v1/responses/",
+        json={"uid": response_uid, "done": True, "text": "", "error": error},
+    )
+
+
 # --- response shaping ----------------------------------------------------
 
 

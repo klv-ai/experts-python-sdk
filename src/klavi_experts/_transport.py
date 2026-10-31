@@ -41,7 +41,9 @@ DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 3
 #: Streaming has no meaningful overall deadline — a long answer is not a hung
 #: request — but a stalled connection still has to end. httpx's read timeout
-#: applies between chunks, which is the right knob.
+#: applies between chunks, which is the right knob. On an Experts Mesh a turn
+#: can wait silently in line for a busy member's model, so it is a client
+#: option (``stream_timeout``) as well.
 STREAM_READ_TIMEOUT = 300.0
 
 
@@ -127,6 +129,7 @@ class _Base:
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
         headers: Mapping[str, str] | None = None,
+        stream_timeout: float = STREAM_READ_TIMEOUT,
     ) -> None:
         if not base_url:
             raise ValueError("base_url is required")
@@ -140,6 +143,7 @@ class _Base:
         self._timeout = timeout
         self._max_retries = max(1, max_retries)
         self._extra_headers = dict(headers or {})
+        self._stream_timeout = stream_timeout
 
     def _headers(self, request: Request) -> dict[str, str]:
         headers = {"accept": "application/json"}
@@ -203,7 +207,7 @@ class SyncTransport(_Base):
                     # body is not read into memory before we see the status.
                     req = self._client.build_request(
                         **self._build(request),
-                        timeout=httpx.Timeout(None, read=STREAM_READ_TIMEOUT),
+                        timeout=httpx.Timeout(None, read=self._stream_timeout),
                     )
                     response = self._client.send(req, stream=True)
                 else:
@@ -215,14 +219,16 @@ class SyncTransport(_Base):
                     continue
                 raise ServerError(str(exc) or "Network request failed") from exc
 
+            if not response.is_success:
+                # Read and release before deciding: a streamed response's body
+                # has not been read yet, and it is where the error's message
+                # is. Left open, it would also hold the connection for the
+                # whole retry window.
+                response.read()
+                response.close()
             error = _outcome(response)
             if error is None:
                 return response
-
-            # Read and release before deciding, or a streamed error response
-            # holds the connection open for the whole retry window.
-            response.read()
-            response.close()
             if attempt < attempts and response.status_code in RETRYABLE:
                 last = error
                 time.sleep(_backoff(attempt, _retry_after(response)))
@@ -262,7 +268,7 @@ class AsyncTransport(_Base):
                 if request.stream:
                     req = self._client.build_request(
                         **self._build(request),
-                        timeout=httpx.Timeout(None, read=STREAM_READ_TIMEOUT),
+                        timeout=httpx.Timeout(None, read=self._stream_timeout),
                     )
                     response = await self._client.send(req, stream=True)
                 else:
@@ -274,12 +280,12 @@ class AsyncTransport(_Base):
                     continue
                 raise ServerError(str(exc) or "Network request failed") from exc
 
+            if not response.is_success:
+                await response.aread()
+                await response.aclose()
             error = _outcome(response)
             if error is None:
                 return response
-
-            await response.aread()
-            await response.aclose()
             if attempt < attempts and response.status_code in RETRYABLE:
                 last = error
                 await asyncio.sleep(_backoff(attempt, _retry_after(response)))

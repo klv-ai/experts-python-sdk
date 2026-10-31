@@ -18,6 +18,7 @@ from __future__ import annotations
 # it. `builtins.list` says what is meant, and keeps `.list()` as the method
 # name every other SDK uses.
 import builtins
+import contextlib
 import time
 from typing import Any, BinaryIO
 
@@ -25,7 +26,7 @@ import httpx
 
 from . import _chat_stream
 from ._transport import Request, SyncTransport
-from .errors import NotFoundError, StreamError
+from .errors import ExpertsError, NotFoundError, StreamError
 from .resources import conversations as _conv
 from .resources import experts as _experts
 from .resources import knowledge as _knowledge
@@ -37,6 +38,9 @@ from .types import (
     ConversationWithMessages,
     Expert,
     KnowledgeDocument,
+    SearchHit,
+    UploadJob,
+    UploadStatus,
 )
 
 
@@ -57,10 +61,12 @@ class Experts:
     def list_guest_visible(self) -> builtins.list[Expert]:
         """Experts a browser session may actually use.
 
-        A session token carries the guest role, and an expert above that floor
-        resolves to nothing server-side — the chat then answers on the site
-        default model with no persona and no knowledge, silently. Use this to
-        build a picker that only offers experts that will work.
+        A session token carries the guest role, so ``sessions.create()``
+        refuses an expert above that floor, a private one, or one limited to
+        org profiles (a visitor is in none of them). Before build pack 1.1 such
+        an expert silently answered on the site default model with no persona
+        and no knowledge instead. Use this to build a picker that only offers
+        experts that will work.
         """
         return [e for e in self.list() if e.guest_visible]
 
@@ -162,17 +168,24 @@ class Conversations:
             raise StreamError("The server did not return a placeholder response uid")
 
         # 3. Generate. Streams NDJSON over plain HTTP.
-        response = self._t.send(
-            _conv.chat_request(
-                conversation_uid,
-                question,
-                response_uid=response_uid,
-                expert=expert,
-                model=model,
-                images=images,
-                context=context,
+        try:
+            response = self._t.send(
+                _conv.chat_request(
+                    conversation_uid,
+                    question,
+                    response_uid=response_uid,
+                    expert=expert,
+                    model=model,
+                    images=images,
+                    context=context,
+                )
             )
-        )
+        except ExpertsError as exc:
+            # Refused before it started (an expert this key may not use, a
+            # read-only licence). Nothing will ever write the placeholder, so
+            # settle it with the reason, or the conversation shows it typing.
+            self._settle(response_uid, exc)
+            raise
         return _chat_stream.ChatStream(
             response,
             conversation_uid=conversation_uid,
@@ -180,9 +193,16 @@ class Conversations:
             cancel=self._cancel,
         )
 
-    def _cancel(self, response_uid: str | None) -> None:
-        if response_uid:
-            self._t.request(_conv.cancel_request(response_uid))
+    def _settle(self, response_uid: str, exc: ExpertsError) -> None:
+        # Best effort: the refusal is what the caller needs to see, never a
+        # failure to tidy up after it.
+        with contextlib.suppress(ExpertsError):
+            self._t.request(_conv.settle_request(response_uid, exc.message))
+
+    def _cancel(self, response_uid: str | None) -> bool:
+        if not response_uid:
+            return False
+        return _conv.was_cancelled(self._t.request(_conv.cancel_request(response_uid)))
 
     def ask(
         self,
@@ -210,33 +230,73 @@ class Knowledge:
         )
 
     def list_documents(
-        self, *, collection: str | None = None, limit: int | None = None
+        self,
+        *,
+        collection: str | None = None,
+        limit: int | None = None,
+        skip: int | None = None,
+        search: str | None = None,
     ) -> list[KnowledgeDocument]:
+        """Documents this credential may read, optionally in one collection.
+
+        ``search`` matches the file name, title or summary — it is a filter,
+        not a semantic search; for that, use :meth:`search`.
+        """
         return _knowledge.to_documents(
             self._t.request(
-                _knowledge.documents_request(collection=collection, limit=limit)
-            )
+                _knowledge.documents_request(
+                    collection=collection, limit=limit, skip=skip, search=search
+                )
+            ),
+            collection=collection,
         )
 
     def upload(
         self, file: BinaryIO, *, collection: str, filename: str = "upload"
-    ) -> KnowledgeDocument:
+    ) -> UploadJob:
         """Upload a file into a collection.
 
-        Returns as soon as the file is accepted. It is NOT searchable yet — the
-        worker still has to split, embed and index it. Follow with
-        :meth:`wait_for_processing` if the next thing you do is query.
+        Returns as soon as the file is accepted, with the indexing job it
+        joined. It is NOT searchable yet — the worker still has to split,
+        embed and index it. Follow with :meth:`wait_for_processing` if the
+        next thing you do is query; that is also where the new document's uid
+        and any read failure come back.
         """
-        response = self._t.send(
-            _knowledge.upload_request(
-                file=file, filename=filename, collection=collection
+        return _knowledge.to_upload_job(
+            self._t.request(
+                _knowledge.upload_request(
+                    file=file, filename=filename, collection=collection
+                )
             )
         )
-        try:
-            response.read()
-            return _knowledge.to_document(_knowledge.unwrap(response.json()))
-        finally:
-            response.close()
+
+    def upload_status(self, job: UploadJob | int) -> UploadStatus:
+        """Where an upload's indexing job has got to, without waiting."""
+        job_id = _knowledge.job_id_of(job)
+        return _knowledge.to_upload_status(
+            job_id, self._t.request(_knowledge.upload_status_request(job_id))
+        )
+
+    def wait_for_processing(
+        self, job: UploadJob | int, *, timeout: float = 120.0, interval: float = 2.0
+    ) -> UploadStatus:
+        """Poll until every file in the job is searchable or has failed.
+
+        Returns the last status either way: truthy when every file is
+        searchable, falsy on a failure or on timeout (check ``.done`` and
+        ``.failed`` to tell which). There is no push signal for this, so
+        polling is the honest answer rather than a workaround.
+
+        Large files take longer than the default allows, and a recording is
+        transcribed before it becomes a document at all — raise ``timeout``
+        for those.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.upload_status(job)
+            if status.done or time.monotonic() >= deadline:
+                return status
+            time.sleep(interval)
 
     def search(
         self,
@@ -244,28 +304,21 @@ class Knowledge:
         *,
         collections: list[str] | None = None,
         limit: int = 8,
-    ) -> list[KnowledgeDocument]:
-        return _knowledge.to_documents(
+    ) -> list[SearchHit]:
+        """The passages that best match ``query``, closest first.
+
+        Searches every collection this credential may read unless
+        ``collections`` narrows it.
+        """
+        return _knowledge.to_hits(
             self._t.request(
                 _knowledge.search_request(query, collections=collections, limit=limit)
             )
         )
 
-    def wait_for_processing(
-        self, uid: str, *, timeout: float = 120.0, interval: float = 2.0
-    ) -> bool:
-        """Poll until a document is embedded. True when ready, False on timeout.
-
-        There is no push signal for this, so polling is the honest answer
-        rather than a workaround.
-        """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            raw = self._t.request(_knowledge.document_request(uid))
-            if _knowledge.is_processed(raw):
-                return True
-            time.sleep(interval)
-        return False
+    def delete_document(self, uid: str) -> None:
+        """Delete a document, from every collection it is in."""
+        self._t.request(_knowledge.delete_document_request(uid))
 
 
 class Sessions:
@@ -303,6 +356,10 @@ class ExpertsClient:
     """Talk to a Klavi Experts installation.
 
     ``api_key`` is a full user identity on the install. Keep it on a server.
+
+    ``stream_timeout`` is the longest silence, in seconds, tolerated between
+    two pieces of a streamed answer. On an Experts Mesh a turn can wait in
+    line for a busy member's model without a word; raise it if yours do.
     """
 
     def __init__(
@@ -314,6 +371,7 @@ class ExpertsClient:
         timeout: float = 60.0,
         max_retries: int = 3,
         headers: dict[str, str] | None = None,
+        stream_timeout: float = 300.0,
         http_client: httpx.Client | None = None,
     ) -> None:
         self._transport = SyncTransport(
@@ -323,6 +381,7 @@ class ExpertsClient:
             timeout=timeout,
             max_retries=max_retries,
             headers=headers,
+            stream_timeout=stream_timeout,
             client=http_client,
         )
         self.experts = Experts(self._transport)

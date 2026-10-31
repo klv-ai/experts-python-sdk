@@ -67,7 +67,7 @@ with experts.conversations.send(conversation.uid, "Hello") as stream:
         match event.type:
             case "token":    print(event.content, end="", flush=True)
             case "thinking": ...   # reasoning tokens, when the model exposes them
-            case "action":   ...   # "rag_search", "tool_call" — for a status line
+            case "queued":   ...   # waiting in line for another mesh server's model
             case "done":     print(event.usage, event.source_docs)
 ```
 
@@ -80,12 +80,16 @@ result.source_docs     # documents retrieved, with similarity scores
 result.tools_used      # e.g. ["web_search"]
 result.usage.total_ms  # milliseconds (the API speaks nanoseconds)
 result.error           # set when generation failed inside a 200 — always check
+result.model           # the model that answered
+result.data_artifacts  # tables, charts and sheet edits a tool produced
 ```
+
+On an [Experts Mesh](https://klv.ai/mesh), an answer can come from another server's model. `result.served_by` names that server; `result.mesh_fallback` says when the expert's own model was out of reach and this server's answered instead. While a busy server's model has the request in line, the stream sends `queued` events (`event.ahead`, `event.name`) and nothing else. Raise `stream_timeout` on the client if yours wait longer than five minutes.
 
 ### Stopping
 
 ```python
-stream.cancel()   # stops the model
+stream.cancel()   # stops the model; True if the server found it running
 stream.detach()   # stop reading; let it finish and persist
 ```
 
@@ -105,7 +109,9 @@ return {"token": session.token}
 
 The browser then talks to the install directly, using [`@klv-ai/experts/browser`](https://www.npmjs.com/package/@klv-ai/experts) or plain `fetch`. Your server is involved once, to mint — you are not proxying every token.
 
-**The expert must be guest-visible.** A session token carries the guest role, and an expert above that floor resolves to nothing server-side — the chat then answers on the site's default model with no persona and no knowledge, silently, with a normal 200. `sessions.create()` refuses such an expert up front and tells you how to fix it. `experts.experts.list_guest_visible()` gives you the ones that will work.
+**The expert must be guest-visible**: minimum role Guest, not private, and not limited to org profiles. A session token carries the guest role, so `sessions.create()` refuses any other expert up front and tells you how to fix it. `experts.experts.list_guest_visible()` gives you the ones that will work.
+
+**On an Experts Mesh, the browser talks to the server you minted on.** A session lives on the server that issued it; another member of the mesh does not know it and answers 401.
 
 ## Knowledge
 
@@ -113,29 +119,42 @@ The browser then talks to the install directly, using [`@klv-ai/experts/browser`
 collections = experts.knowledge.list_collections()
 
 with open("policy.pdf", "rb") as f:
-    doc = experts.knowledge.upload(f, collection=collections[0].uid, filename="policy.pdf")
+    job = experts.knowledge.upload(f, collection=collections[0].uid, filename="policy.pdf")
 
-# Uploading is asynchronous: the file is accepted, then split, embedded and
-# indexed by a worker. It is NOT searchable until that finishes.
-experts.knowledge.wait_for_processing(doc.uid)
+# Uploading is asynchronous: the file is accepted into an indexing job, then
+# split, embedded and indexed by a worker. It is NOT searchable until that
+# finishes — and the job is where the document's uid and any failure appear.
+status = experts.knowledge.wait_for_processing(job)
+if not status:
+    print(status.failed)       # e.g. a password-protected PDF, and why
 
-hits = experts.knowledge.search("refund policy")
+for hit in experts.knowledge.search("refund policy", collections=[collections[0].uid]):
+    print(hit.document_name, hit.similarity, hit.text)
 ```
+
+`search()` returns passages, closest first, each with the document it came from. `list_documents(collection=..., search=...)` lists and filters documents by name, title or summary; `delete_document(uid)` removes one. Allow longer than the two-minute default for large files, and much longer for recordings, which are transcribed before they become documents.
 
 ## Errors
 
 ```python
-from klavi_experts import RateLimitError, LicenseError
+from klavi_experts import ExpertNotAvailableError, LicenseError, RateLimitError
 
 try:
-    experts.conversations.ask("hi").text()
+    experts.conversations.ask("hi", expert=EXPERT_UID).text()
 except RateLimitError as e:
     time.sleep(e.retry_after or 5)
-except LicenseError:
-    # The INSTALL's licence has lapsed. Nothing about your request is wrong and
-    # no retry will help — its administrator has to renew.
+except ExpertNotAvailableError:
+    # This key's user may not use that expert (its role, privacy or org
+    # profiles). Pick another from experts.experts.list().
+    ...
+except LicenseError as e:
+    # The INSTALL's licence is not valid. Nothing about your request is wrong
+    # and no retry will help — its administrator has to act. e.read_only is
+    # True for a recently expired licence: reads still work, writes do not.
     ...
 ```
+
+For 30 days after its licence expires, an install is read-only: anything sent as a GET still works, and everything else raises `LicenseReadOnlyError` (a `LicenseError`). That includes sending a message and `knowledge.search()`, which read but go out as a POST.
 
 429 and 5xx are retried automatically with backoff that honours `Retry-After`. A 4xx never is. Neither is a chat turn — retrying one bills twice and can produce two answers.
 
@@ -152,6 +171,9 @@ These are the parts of the API that surprise people. The SDK handles each of the
 | **404 can mean "forbidden"** | A conversation you may not see answers 404 so a uid probe reveals nothing. The SDK does not guess which it was. |
 | **Casing is mixed by design** | Conversation rows are camelCase; message and expert rows are snake_case; knowledge responses are wrapped in an envelope. All normalised. |
 | **Streaming is plain HTTP** | NDJSON over `POST`. No WebSocket is required for chat, contrary to some older notes. |
+| **A refused turn leaves a placeholder behind** | `/chat` updates a message row you created first. When it refuses to start, nothing settles that row, and the conversation shows the reply "typing" forever. The SDK settles it with the reason. |
+| **An expert's instructions are for its managers** | Since 1.1, `Expert.instructions` is only filled in for the expert's owner and administrators. |
+| **Knowledge says "forbidden" as 401** | The knowledge service answers a document you may not read with 401. The SDK raises `ExpertsPermissionError`, not `AuthError`: the key is fine. |
 
 ## OpenAI-compatible endpoint
 
@@ -176,7 +198,7 @@ Retrieval still happens; source documents come back under a `klavi` key on the f
 
 ## Requirements
 
-Python 3.10 or later, and an install running build pack **1.0.49** or later.
+Python 3.10 or later, and an install running build pack **1.0.49** or later. Tested against **1.1**; the mesh fields and the read-only licence error are only sent by a 1.1 install.
 
 ## Contributing
 

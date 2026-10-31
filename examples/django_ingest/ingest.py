@@ -1,8 +1,9 @@
 """Feed a corpus into an expert's knowledge, and wait for it to be searchable.
 
-Uploading is ASYNCHRONOUS. The file is accepted, then split, embedded and
-indexed by a worker — so a document that has just uploaded is not retrievable
-yet, and querying immediately returns nothing with no error to explain it.
+Uploading is ASYNCHRONOUS. The file is accepted into an indexing job, then
+split, embedded and indexed by a worker — so a document that has just uploaded
+is not retrievable yet, and querying immediately returns nothing with no error
+to explain it. The job is also where a file that could not be read says why.
 
     python ingest.py ./policies/*.pdf
 """
@@ -36,22 +37,31 @@ def main() -> int:
         collection = collections[0].uid
         print(f"Using collection {collections[0].name} ({collection})")
 
-    pending = []
+    jobs = []
     for path in paths:
         with path.open("rb") as handle:
-            doc = experts.knowledge.upload(
+            job = experts.knowledge.upload(
                 handle, collection=collection, filename=path.name
             )
-        print(f"uploaded {path.name} -> {doc.uid}")
-        pending.append(doc)
+        print(f"uploaded {path.name} (job {job.job_id})")
+        jobs.append(job)
 
     # Accepted is not the same as searchable.
-    for doc in pending:
-        ready = experts.knowledge.wait_for_processing(doc.uid, timeout=300)
-        print(f"{'indexed ' if ready else 'TIMEOUT '} {doc.name}")
+    failures = 0
+    for job in jobs:
+        status = experts.knowledge.wait_for_processing(job, timeout=300)
+        for file in status.files:
+            if file.searchable:
+                print(f"indexed  {file.name} -> {file.document_uid}")
+            elif file.status == "failed":
+                failures += 1
+                print(f"FAILED   {file.name}: {file.error}")
+            else:
+                failures += 1
+                print(f"TIMEOUT  {file.name} (still {file.status})")
 
     experts.close()
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
