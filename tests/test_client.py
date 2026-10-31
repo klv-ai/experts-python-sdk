@@ -16,11 +16,15 @@ import pytest
 from klavi_experts import (
     AuthError,
     BadRequestError,
+    ExpertNotAvailableError,
     ExpertsClient,
+    ExpertsPermissionError,
     LicenseError,
+    LicenseReadOnlyError,
     NotFoundError,
     RateLimitError,
     ServerError,
+    StreamError,
 )
 
 KEY = "sk-" + "k" * 48
@@ -56,10 +60,10 @@ class Recorder:
 def make_client(replies: list[httpx.Response], **kw) -> tuple[ExpertsClient, Recorder]:
     recorder = Recorder(replies)
     transport = httpx.MockTransport(recorder.handler)
+    kw.setdefault("max_retries", 1)
     client = ExpertsClient(
         base_url="https://install.example",
         api_key=KEY,
-        max_retries=1,
         http_client=httpx.Client(transport=transport),
         **kw,
     )
@@ -174,11 +178,75 @@ class TestCancelling:
         stream.cancel()
         assert rec.paths[-1] == "POST /api/v1/conversations/chat/stub-row/cancel"
 
+    def test_cancel_reports_whether_there_was_anything_to_stop(self):
+        client, _ = make_client([*SEND_REPLIES, ok({"cancelled": False})])
+        assert client.conversations.send(CONV, "hi").cancel() is False
+        client, _ = make_client([*SEND_REPLIES, ok({"cancelled": True})])
+        assert client.conversations.send(CONV, "hi").cancel() is True
+
     def test_detach_does_not_call_cancel(self):
         client, rec = make_client(SEND_REPLIES)
         stream = client.conversations.send(CONV, "hi")
         stream.detach()
         assert not any("cancel" in p for p in rec.paths)
+
+
+REFUSAL = {"detail": {"reason": "expert_not_available",
+                      "message": "This expert isn't available to you."}}
+
+
+class TestRefusedTurns:
+    """A chat turn the server refuses before it starts (build pack 1.1)."""
+
+    def refused(self, status, payload) -> list[httpx.Response]:
+        # A real streamed response: its body is not read until asked, which
+        # is what the 0.1 transport tripped over (httpx.ResponseNotRead).
+        return [
+            ok({"uid": "user-row"}),
+            ok({"uid": "stub-row"}),
+            httpx.Response(
+                status,
+                stream=httpx.ByteStream(json.dumps(payload).encode()),
+                headers={"content-type": "application/json"},
+            ),
+            ok({"uid": "stub-row", "done": True}),
+        ]
+
+    def test_an_expert_the_key_may_not_use_is_its_own_error(self):
+        client, _ = make_client(self.refused(403, REFUSAL))
+        with pytest.raises(ExpertNotAvailableError, match="isn't available") as exc:
+            client.conversations.send(CONV, "hi", expert="e-locked")
+        assert isinstance(exc.value, ExpertsPermissionError)
+        assert exc.value.code == "expert_not_available"
+
+    def test_the_placeholder_is_settled_so_it_does_not_type_forever(self):
+        client, rec = make_client(self.refused(403, REFUSAL))
+        with pytest.raises(ExpertNotAvailableError):
+            client.conversations.send(CONV, "hi", expert="e-locked")
+        assert rec.paths[-1] == "PUT /api/v1/responses/"
+        assert rec.body(3) == {"uid": "stub-row", "done": True, "text": "",
+                               "error": "This expert isn't available to you."}
+
+    def test_a_streamed_error_body_is_read_not_crashed_on(self):
+        client, _ = make_client(self.refused(404, {"detail": "Conversation not found"}))
+        with pytest.raises(NotFoundError, match="Conversation not found"):
+            client.conversations.send(CONV, "hi")
+
+
+class TestDroppedStreams:
+    class Broken(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"type":"stream","message":{"content":"Hel"},"done":false}\n'
+            raise httpx.ReadTimeout("timed out")
+
+    def test_a_timeout_mid_answer_is_a_stream_error(self):
+        # e.g. a mesh turn waiting silently in line past stream_timeout.
+        client, _ = make_client([ok({"uid": "u"}), ok({"uid": "stub-row"}),
+                                 httpx.Response(200, stream=self.Broken())])
+        stream = client.conversations.send(CONV, "hi")
+        with pytest.raises(StreamError, match="re-read the conversation") as exc:
+            stream.text()
+        assert exc.value.code == "incomplete_stream"
 
 
 class TestErrors:
@@ -204,8 +272,34 @@ class TestErrors:
             httpx.Response(403, json={"error": "license_expired",
                                       "message": "Your license has expired."})
         ])
-        with pytest.raises(LicenseError, match="installation's licence"):
+        with pytest.raises(LicenseError, match="installation's licence") as exc:
             client.experts.list()
+        assert not exc.value.read_only
+
+    def test_a_write_in_the_read_only_window_is_still_a_licence_error(self):
+        # For 30 days after expiry an install serves reads and refuses writes
+        # with its own code. Callers catching LicenseError must still see it.
+        client, _ = make_client([
+            httpx.Response(403, json={
+                "error": "license_expired_readonly",
+                "message": "This licence has expired. The server is read-only "
+                           "until it is renewed; you can still view and export "
+                           "your data.",
+            })
+        ])
+        with pytest.raises(LicenseReadOnlyError, match="read-only") as exc:
+            client.conversations.create(title="T")
+        assert isinstance(exc.value, LicenseError)
+        assert exc.value.read_only
+        assert exc.value.code == "license_expired_readonly"
+
+    def test_a_knowledge_permission_refusal_is_not_an_auth_error(self):
+        # The knowledge service says "you may not see this" with a 401. The
+        # key is fine; re-authenticating would not help.
+        client, _ = make_client([httpx.Response(
+            401, json={"detail": "User has insufficient permissions"})])
+        with pytest.raises(ExpertsPermissionError):
+            client.knowledge.list_documents()
 
     def test_retry_after_is_exposed(self):
         client, _ = make_client([
@@ -247,9 +341,16 @@ class TestNormalisation:
                 {"uid": "guest-ok", "name": "A", "min_role_id": 1, "private": False},
                 {"uid": "too-high", "name": "B", "min_role_id": 2, "private": False},
                 {"uid": "is-private", "name": "C", "min_role_id": 1, "private": True},
+                # Limited to org profiles: a visitor is in none of them, and
+                # minting a session for it is refused.
+                {"uid": "scoped", "name": "D", "min_role_id": 1, "private": False,
+                 "scope_uids": ["22222222-2222-2222-2222-222222222222"]},
+                {"uid": "unscoped", "name": "E", "min_role_id": 1, "private": False,
+                 "scope_uids": None},
             ])
         ])
-        assert [e.uid for e in client.experts.list_guest_visible()] == ["guest-ok"]
+        assert [e.uid for e in client.experts.list_guest_visible()] == [
+            "guest-ok", "unscoped"]
 
     def test_message_rows_keep_their_snake_case_source(self):
         client, _ = make_client([

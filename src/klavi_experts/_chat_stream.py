@@ -46,15 +46,22 @@ class _Accumulator:
                 finish_reason=event.finish_reason,
                 aborted=event.aborted,
                 error=event.error,
+                model=event.model,
+                served_by=event.served_by,
+                mesh_fallback=event.mesh_fallback,
+                mesh_unavailable=event.mesh_unavailable,
+                generated_images=event.generated_images,
+                data_artifacts=event.data_artifacts,
             )
 
-    def incomplete(self) -> StreamError:
+    def incomplete(self, cause: Exception | None = None) -> StreamError:
         # The answer very likely completed on the server regardless —
         # generation is detached — so say what recovery actually looks like.
+        how = f" ({type(cause).__name__}: {cause})" if cause else ""
         return StreamError(
-            "The stream ended without a terminal event. The answer may still "
-            "have completed on the server: re-read the conversation rather "
-            "than resending.",
+            f"The stream ended without a terminal event{how}. The answer may "
+            "still have completed on the server: re-read the conversation "
+            "rather than resending.",
             code="incomplete_stream",
         )
 
@@ -73,7 +80,7 @@ class ChatStream:
         *,
         conversation_uid: str,
         response_uid: str | None,
-        cancel: Callable[[str | None], None],
+        cancel: Callable[[str | None], bool],
     ) -> None:
         self._response = response
         self._cancel = cancel
@@ -104,15 +111,24 @@ class ChatStream:
 
         buffer = LineBuffer()
         try:
-            for chunk in self._response.iter_bytes():
-                for raw in buffer.feed(chunk):
-                    event = to_event(raw)
-                    if event is None:
-                        continue
-                    self._acc.observe(event)
-                    yield event
-                    if isinstance(event, DoneEvent):
-                        return
+            try:
+                for chunk in self._response.iter_bytes():
+                    for raw in buffer.feed(chunk):
+                        event = to_event(raw)
+                        if event is None:
+                            continue
+                        self._acc.observe(event)
+                        yield event
+                        if isinstance(event, DoneEvent):
+                            return
+            except httpx.HTTPError as exc:
+                # A timeout or a dropped connection mid-answer. Raised as the
+                # SDK's own error, with what recovery looks like, rather than
+                # leaking httpx's — unless the caller stopped reading on
+                # purpose, which closes the connection under the loop.
+                if self._cancelled or self._detached:
+                    return
+                raise self._acc.incomplete(exc) from exc
             for raw in buffer.flush():
                 event = to_event(raw)
                 if event is None:
@@ -138,16 +154,20 @@ class ChatStream:
         """The assistant's reply as a string."""
         return self.result().text
 
-    def cancel(self) -> None:
-        """Stop the model.
+    def cancel(self) -> bool:
+        """Stop the model. True when the server found it running and stopped it.
 
         Not the same as walking away from the stream: generation is detached
         server-side, so an abandoned request keeps generating, keeps costing
         and still persists its answer. This is the only thing that stops it.
+
+        False means the server had nothing to stop: the answer had already
+        finished, or — behind a load balancer with several conversation
+        workers — it is running on another one.
         """
         self._cancelled = True
         self.close()
-        self._cancel(self.response_uid)
+        return self._cancel(self.response_uid)
 
     def detach(self) -> None:
         """Stop reading, deliberately leaving the answer to finish server-side.
@@ -171,7 +191,7 @@ class AsyncChatStream:
         *,
         conversation_uid: str,
         response_uid: str | None,
-        cancel: Callable[[str | None], Awaitable[None]],
+        cancel: Callable[[str | None], Awaitable[bool]],
     ) -> None:
         self._response = response
         self._cancel = cancel
@@ -201,15 +221,20 @@ class AsyncChatStream:
 
         buffer = LineBuffer()
         try:
-            async for chunk in self._response.aiter_bytes():
-                for raw in buffer.feed(chunk):
-                    event = to_event(raw)
-                    if event is None:
-                        continue
-                    self._acc.observe(event)
-                    yield event
-                    if isinstance(event, DoneEvent):
-                        return
+            try:
+                async for chunk in self._response.aiter_bytes():
+                    for raw in buffer.feed(chunk):
+                        event = to_event(raw)
+                        if event is None:
+                            continue
+                        self._acc.observe(event)
+                        yield event
+                        if isinstance(event, DoneEvent):
+                            return
+            except httpx.HTTPError as exc:
+                if self._cancelled or self._detached:
+                    return
+                raise self._acc.incomplete(exc) from exc
             for raw in buffer.flush():
                 event = to_event(raw)
                 if event is None:
@@ -233,10 +258,10 @@ class AsyncChatStream:
     async def text(self) -> str:
         return (await self.result()).text
 
-    async def cancel(self) -> None:
+    async def cancel(self) -> bool:
         self._cancelled = True
         await self.aclose()
-        await self._cancel(self.response_uid)
+        return await self._cancel(self.response_uid)
 
     def detach(self) -> None:
         self._detached = True

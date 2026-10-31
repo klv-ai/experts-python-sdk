@@ -11,7 +11,9 @@ a customer.
 from __future__ import annotations
 
 import contextlib
+import io
 import os
+import uuid
 
 import pytest
 
@@ -56,7 +58,11 @@ class TestExperts:
 
     def test_guest_visibility_is_computable(self, experts):
         for expert in experts:
-            expected = not expert.private and expert.min_role_id <= 1
+            expected = (
+                not expert.private
+                and expert.min_role_id <= 1
+                and not expert.scope_uids
+            )
             assert expert.guest_visible == expected
 
 
@@ -139,6 +145,34 @@ class TestKnowledge:
         if collections:
             assert isinstance(collections[0].uid, str)
             assert isinstance(collections[0].file_count, int)
+
+    def test_upload_index_search_delete(self, client):
+        # The round trip the 0.1 release shipped without ever exercising:
+        # every step of it was against the wrong field or the wrong route.
+        collections = client.knowledge.list_collections()
+        if not collections:
+            pytest.skip("this key can see no collection to upload into")
+        collection = collections[0].uid
+        word = f"sdkprobe{uuid.uuid4().hex[:10]}"
+        body = f"Klavi SDK live test. The probe word is {word}.".encode()
+
+        job = client.knowledge.upload(
+            io.BytesIO(body), collection=collection, filename=f"{word}.txt"
+        )
+        assert job.job_id > 0
+        status = client.knowledge.wait_for_processing(job, timeout=180)
+        assert status, f"not indexed: {status}"
+        [doc_uid] = status.document_uids
+        try:
+            listed = client.knowledge.list_documents(collection=collection)
+            doc = next(d for d in listed if d.uid == doc_uid)
+            assert doc.name == f"{word}.txt"
+            assert doc.collection_uid == collection
+
+            hits = client.knowledge.search(word, collections=[collection], limit=3)
+            assert any(h.document_uid == doc_uid and word in h.text for h in hits)
+        finally:
+            client.knowledge.delete_document(doc_uid)
 
 
 class TestSessions:

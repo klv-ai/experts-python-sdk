@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Please report security issues privately to **security@klavi.ai**, or through
+Please report security issues privately to **security@klv.ai**, or through
 GitHub's private vulnerability reporting on this repository. Do not open a
 public issue.
 

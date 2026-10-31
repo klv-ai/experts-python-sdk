@@ -17,13 +17,14 @@ import asyncio
 # it. `builtins.list` says what is meant, and keeps `.list()` as the method
 # name every other SDK uses.
 import builtins
+import contextlib
 from typing import Any, BinaryIO
 
 import httpx
 
 from . import _chat_stream
 from ._transport import AsyncTransport, Request
-from .errors import NotFoundError, StreamError
+from .errors import ExpertsError, NotFoundError, StreamError
 from .resources import conversations as _conv
 from .resources import experts as _experts
 from .resources import knowledge as _knowledge
@@ -35,6 +36,9 @@ from .types import (
     ConversationWithMessages,
     Expert,
     KnowledgeDocument,
+    SearchHit,
+    UploadJob,
+    UploadStatus,
 )
 
 
@@ -145,17 +149,23 @@ class AsyncConversations:
         if not response_uid:
             raise StreamError("The server did not return a placeholder response uid")
 
-        response = await self._t.send(
-            _conv.chat_request(
-                conversation_uid,
-                question,
-                response_uid=response_uid,
-                expert=expert,
-                model=model,
-                images=images,
-                context=context,
+        try:
+            response = await self._t.send(
+                _conv.chat_request(
+                    conversation_uid,
+                    question,
+                    response_uid=response_uid,
+                    expert=expert,
+                    model=model,
+                    images=images,
+                    context=context,
+                )
             )
-        )
+        except ExpertsError as exc:
+            # Refused before it started: settle the placeholder, as the sync
+            # twin does, or the conversation shows it typing forever.
+            await self._settle(response_uid, exc)
+            raise
         return _chat_stream.AsyncChatStream(
             response,
             conversation_uid=conversation_uid,
@@ -163,9 +173,16 @@ class AsyncConversations:
             cancel=self._cancel,
         )
 
-    async def _cancel(self, response_uid: str | None) -> None:
-        if response_uid:
+    async def _settle(self, response_uid: str, exc: ExpertsError) -> None:
+        with contextlib.suppress(ExpertsError):
+            await self._t.request(_conv.settle_request(response_uid, exc.message))
+
+    async def _cancel(self, response_uid: str | None) -> bool:
+        if not response_uid:
+            return False
+        return _conv.was_cancelled(
             await self._t.request(_conv.cancel_request(response_uid))
+        )
 
     async def ask(
         self,
@@ -194,49 +211,64 @@ class AsyncKnowledge:
         )
 
     async def list_documents(
-        self, *, collection: str | None = None, limit: int | None = None
+        self,
+        *,
+        collection: str | None = None,
+        limit: int | None = None,
+        skip: int | None = None,
+        search: str | None = None,
     ) -> list[KnowledgeDocument]:
+        """Documents this credential may read — see the sync twin."""
         return _knowledge.to_documents(
             await self._t.request(
-                _knowledge.documents_request(collection=collection, limit=limit)
-            )
+                _knowledge.documents_request(
+                    collection=collection, limit=limit, skip=skip, search=search
+                )
+            ),
+            collection=collection,
         )
 
     async def upload(
         self, file: BinaryIO, *, collection: str, filename: str = "upload"
-    ) -> KnowledgeDocument:
-        """Accepted, not yet searchable — see the sync twin."""
-        response = await self._t.send(
-            _knowledge.upload_request(
-                file=file, filename=filename, collection=collection
+    ) -> UploadJob:
+        """Accepted and queued, not yet searchable — see the sync twin."""
+        return _knowledge.to_upload_job(
+            await self._t.request(
+                _knowledge.upload_request(
+                    file=file, filename=filename, collection=collection
+                )
             )
         )
-        try:
-            await response.aread()
-            return _knowledge.to_document(_knowledge.unwrap(response.json()))
-        finally:
-            await response.aclose()
+
+    async def upload_status(self, job: UploadJob | int) -> UploadStatus:
+        job_id = _knowledge.job_id_of(job)
+        return _knowledge.to_upload_status(
+            job_id, await self._t.request(_knowledge.upload_status_request(job_id))
+        )
+
+    async def wait_for_processing(
+        self, job: UploadJob | int, *, timeout: float = 120.0, interval: float = 2.0
+    ) -> UploadStatus:
+        """Poll until every file is searchable or has failed — see the sync twin."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            status = await self.upload_status(job)
+            if status.done or loop.time() >= deadline:
+                return status
+            await asyncio.sleep(interval)
 
     async def search(
         self, query: str, *, collections: list[str] | None = None, limit: int = 8
-    ) -> list[KnowledgeDocument]:
-        return _knowledge.to_documents(
+    ) -> list[SearchHit]:
+        return _knowledge.to_hits(
             await self._t.request(
                 _knowledge.search_request(query, collections=collections, limit=limit)
             )
         )
 
-    async def wait_for_processing(
-        self, uid: str, *, timeout: float = 120.0, interval: float = 2.0
-    ) -> bool:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while loop.time() < deadline:
-            raw = await self._t.request(_knowledge.document_request(uid))
-            if _knowledge.is_processed(raw):
-                return True
-            await asyncio.sleep(interval)
-        return False
+    async def delete_document(self, uid: str) -> None:
+        await self._t.request(_knowledge.delete_document_request(uid))
 
 
 class AsyncSessions:
@@ -280,6 +312,7 @@ class AsyncExpertsClient:
         timeout: float = 60.0,
         max_retries: int = 3,
         headers: dict[str, str] | None = None,
+        stream_timeout: float = 300.0,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._transport = AsyncTransport(
@@ -289,6 +322,7 @@ class AsyncExpertsClient:
             timeout=timeout,
             max_retries=max_retries,
             headers=headers,
+            stream_timeout=stream_timeout,
             client=http_client,
         )
         self.experts = AsyncExperts(self._transport)

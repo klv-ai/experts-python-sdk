@@ -32,6 +32,9 @@ from .types import (
     ChatEvent,
     DoneEvent,
     KeepaliveEvent,
+    MeshFallback,
+    QueuedEvent,
+    ServedBy,
     SourceDocument,
     ThinkingEvent,
     TokenEvent,
@@ -103,6 +106,17 @@ def to_event(raw: dict[str, Any]) -> ChatEvent | None:
     if kind == "thinking":
         return ThinkingEvent(content=content)
 
+    if kind == "mesh_waiting":
+        # Waiting in line for another mesh member's model. Live only, never
+        # stored, and never content.
+        ahead = raw.get("ahead")
+        return QueuedEvent(
+            ahead=int(ahead) if isinstance(ahead, (int, float)) else 0,
+            node=_str_or_none(raw.get("node")),
+            name=_str_or_none(raw.get("name")),
+            rerouting=raw.get("rerouting") is True,
+        )
+
     if kind == "action":
         return ActionEvent(
             action=str(raw.get("action") or ""),
@@ -126,6 +140,18 @@ def to_event(raw: dict[str, Any]) -> ChatEvent | None:
             error=error if isinstance(error, str) and error else None,
             context_overflow=raw.get("context_overflow") is True,
             response_uid=_str_or_none(raw.get("response")),
+            model=_str_or_none(raw.get("model")),
+            served_by=ServedBy.from_wire(raw.get("served_by")),
+            mesh_fallback=MeshFallback.from_wire(raw.get("mesh_fallback")),
+            mesh_unavailable=(
+                raw["mesh_unavailable"]
+                if isinstance(raw.get("mesh_unavailable"), dict)
+                else None
+            ),
+            generated_images=list(raw.get("generated_images") or []),
+            data_artifacts=[
+                a for a in (raw.get("data_artifacts") or []) if isinstance(a, dict)
+            ],
         )
 
     if not content:

@@ -17,6 +17,7 @@ from klavi_experts.types import (
     ActionEvent,
     DoneEvent,
     KeepaliveEvent,
+    QueuedEvent,
     ThinkingEvent,
     TokenEvent,
 )
@@ -155,6 +156,66 @@ class TestTerminalEvent:
         event = to_event({"done": True, "message": {"content": ""}})
         assert event.usage.total_tokens == 0
         assert event.source_docs == []
+
+
+class TestMesh:
+    """Experts Mesh (build pack 1.1): who answered, and waiting in line."""
+
+    def test_waiting_in_line_is_its_own_event_not_content(self):
+        event = to_event({"type": "mesh_waiting", "node": "n-tokyo", "name": "Tokyo",
+                          "ahead": 2, "done": False, "response": "r"})
+        assert event == QueuedEvent(ahead=2, node="n-tokyo", name="Tokyo")
+
+    def test_a_reroute_is_flagged(self):
+        event = to_event({"type": "mesh_waiting", "node": "n", "name": "Tokyo",
+                          "ahead": 0, "rerouting": True, "done": False})
+        assert isinstance(event, QueuedEvent) and event.rerouting
+
+    def test_another_members_model_is_named(self):
+        event = to_event({**TERMINAL, "model": "gemma4:12b", "served_by": {
+            "node": "n-tokyo", "name": "Tokyo", "label": "Tokyo GPU",
+            "model": "gemma4:12b",
+            "route": [{"node": "n-lis", "name": "Lisbon"},
+                      {"node": "n-tokyo", "name": "Tokyo"}]}})
+        assert event.model == "gemma4:12b"
+        assert event.served_by is not None
+        assert event.served_by.name == "Tokyo"
+        assert event.served_by.route == ["Lisbon", "Tokyo"]
+        assert event.mesh_fallback is None
+
+    def test_a_fallback_says_what_was_out_of_reach(self):
+        event = to_event({**TERMINAL, "mesh_fallback": {
+            "node": "n-chi", "name": "Chicago", "label": "", "model": "llama3:70b",
+            "reason": "unreachable", "self_name": "Dili",
+            "answered_with": "gemma4:12b"}})
+        assert event.mesh_fallback is not None
+        assert (event.mesh_fallback.name, event.mesh_fallback.reason,
+                event.mesh_fallback.answered_with) == (
+            "Chicago", "unreachable", "gemma4:12b")
+
+    def test_a_strict_expert_that_cannot_reach_its_model_is_an_error(self):
+        event = to_event({"type": "stream", "message": {"content": ""}, "done": True,
+                          "error": "Chicago is unreachable",
+                          "mesh_unavailable": {"node": "n-chi", "name": "Chicago"},
+                          "model": "llama3:70b", "response": "r"})
+        assert event.error == "Chicago is unreachable"
+        assert event.mesh_unavailable == {"node": "n-chi", "name": "Chicago"}
+
+
+class TestToolOutputs:
+    def test_data_artifacts_and_images_are_carried(self):
+        event = to_event({**TERMINAL,
+                          "data_artifacts": [{"id": "a1", "kind": "chart"}, "junk"],
+                          "generated_images": [{"url": "/img/1.png"}]})
+        assert event.data_artifacts == [{"id": "a1", "kind": "chart"}]
+        assert event.generated_images == [{"url": "/img/1.png"}]
+
+    def test_a_cited_recording_passage_keeps_its_time(self):
+        event = to_event({**TERMINAL, "source_docs": [{
+            "uid": "d", "name": "call.m4a", "cosine_dist": 0.2,
+            "split_uid": "s-9", "start_ms": 61000, "end_ms": 64500}]})
+        doc = event.source_docs[0]
+        assert (doc.split_uid, doc.start_ms, doc.end_ms) == ("s-9", 61000, 64500)
 
 
 class TestGuestStrippedFields:
