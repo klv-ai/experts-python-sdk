@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "klavi-experts"
-version = "0.1.0"
+version = "0.2.0"
 description = "Official Python SDK for the Klavi Experts API — conversations, streaming, experts, and knowledge."
 readme = "README.md"
 license = "MIT"
@@ -51,6 +51,9 @@ testpaths = ["tests"]
 # The live suite needs a running install and a real key; it is opt-in.
 addopts = "--ignore=tests/live"
 asyncio_mode = "auto"
+# Explicit, because pytest-asyncio 0.24+ warns when it is unset and the
+# filterwarnings below turns that warning into a configuration error.
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = ["error"]
 
 [tool.ruff]
