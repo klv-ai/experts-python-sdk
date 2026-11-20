@@ -26,6 +26,7 @@ from . import _chat_stream
 from ._transport import AsyncTransport, Request
 from .errors import ExpertsError, NotFoundError, StreamError
 from .resources import conversations as _conv
+from .resources import decisions as _decisions
 from .resources import experts as _experts
 from .resources import knowledge as _knowledge
 from .resources import sessions as _sessions
@@ -34,6 +35,7 @@ from .types import (
     Collection,
     Conversation,
     ConversationWithMessages,
+    Decision,
     Expert,
     KnowledgeDocument,
     SearchHit,
@@ -333,6 +335,37 @@ class AsyncExpertsClient:
     @property
     def transport(self) -> AsyncTransport:
         return self._transport
+
+    async def decide(
+        self,
+        state: str | dict[str, Any] | list[Any],
+        questions: dict[str, dict[str, Any]],
+        *,
+        model: str | None = None,
+        backend: str | None = None,
+        feature: str | None = None,
+        reference_id: str | None = None,
+    ) -> Decision:
+        """Ask the install's decision model named questions about a case.
+
+        ``questions`` is ``{name: {type, instructions, criteria}}``; see
+        :mod:`klavi_experts.resources.decisions`. Answers come back by name:
+        ``decision["kind"].choice`` and ``.probability`` for a choice question.
+        Experts 1.2 and later; a server's key only (the install refuses a
+        browser session).
+        """
+        return _decisions.to_decision(
+            await self._transport.request(
+                _decisions.decide_request(
+                    state=state,
+                    questions=questions,
+                    model=model,
+                    backend=backend,
+                    feature=feature,
+                    reference_id=reference_id,
+                )
+            )
+        )
 
     async def request(self, method: str, path: str, **kw: Any) -> Any:
         return await self._transport.request(Request(method=method, path=path, **kw))

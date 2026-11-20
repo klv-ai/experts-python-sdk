@@ -216,3 +216,30 @@ async def test_both_produce_identical_requests_for_the_same_call():
 
     assert s_rec.paths == a_rec.paths
     assert s_rec.body(0) == a_rec.body(0)
+
+
+
+DECISION = {
+    "model": "tev1:0.8b",
+    "answers": {
+        "kind": {"type": "choice", "choice": "a", "probabilities": {"a": 0.9, "b": 0.1}}
+    },
+}
+CRITERIA = {"a": "x", "b": "y"}
+KIND = {"kind": {"type": "choice", "instructions": "?", "criteria": CRITERIA}}
+
+
+class TestDecideParity:
+    def test_the_signatures_agree(self):
+        sync, aio = ExpertsClient.decide, AsyncExpertsClient.decide
+        assert inspect.signature(sync) == inspect.signature(aio)
+
+    async def test_both_send_the_same_request_and_read_the_same_answer(self):
+        sync, srec = sync_client([httpx.Response(200, json=DECISION)])
+        aio, arec = async_client([httpx.Response(200, json=DECISION)])
+        got = sync.decide("case", KIND, model="tev1:4b")
+        agot = await aio.decide("case", KIND, model="tev1:4b")
+        assert srec.body(0) == arec.body(0)
+        assert srec.paths == arec.paths == ["POST /api/v1/llm/decide"]
+        assert got == agot and got["kind"].probability == 0.9
+        await aio.aclose()

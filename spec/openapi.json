@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Klavi Experts API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "The HTTP API of a Klavi Experts installation.\n\n## Authentication\n\nSend your API key as `Authorization: Bearer sk-...`. `X-API-Key: sk-...` is\nalso accepted, but send exactly ONE of them \u2014 the gateway checks\n`Authorization` first and that check is terminal, so a stale bearer token\ndecides the request even when a valid key is present in the other header.\n\nA key is a full user identity on the install. It belongs on a server. For\nanything browser-facing, mint a session token with\n`POST /api/v1/public/sessions`.\n\n## Streaming\n\n`POST /api/v1/conversations/chat` returns `application/x-ndjson` over plain\nHTTP \u2014 one JSON object per line, terminated by one carrying `done: true`. No\nWebSocket is required.\n\nTwo things about it surprise people:\n\n* **Sending a message is three calls.** `/chat` never CREATES message rows; it\n  updates one you make first. Create the user's turn and an assistant\n  placeholder with `POST /api/v1/responses/`, then pass the placeholder's uid\n  as `response`. Omit it and the model still answers, but nothing persists.\n* **HTTP 200 is not proof of an answer.** Generation reports its own failures\n  in the terminal event's `error` field, not in the status code.\n\nDurations in the terminal event are NANOSECONDS.\n\n## Errors\n\n`403` with `{\"error\": \"license_expired\"}` is an installation-level failure,\nnot a permission problem: nothing about the request is wrong, and only the\ninstall's administrator can resolve it.\n\nFor 30 days after a licence expires the install is read-only rather than\ndark: GET and HEAD are served, and every other method answers `403` with\n`{\"error\": \"license_expired_readonly\"}`. That includes the reads sent as a\nPOST: a chat turn and `/api/v1/similarity_search/`.\n\n`403` with `{\"detail\": {\"reason\": \"expert_not_available\"}}` from `/chat` means\nthe caller may not use that expert (its role, privacy or org profiles). Before\n1.1 the turn silently answered on the site default model instead.\n",
     "license": {
       "name": "Proprietary"
@@ -159,6 +159,48 @@
         "title": "AdoptContextRequest",
         "description": "Request to link already-embedded documents into a conversation's hidden\nupload collection, matched by content hash.\n\nFields:\n- `conversation_uid`: The conversation whose upload collection should\nreceive the documents (created on first adoption).\n- `keys`: Context keys \u2014 SHA-256 content hashes for file attachments.\nNon-document keys (e.g. web-page URLs) are skipped, not errors."
       },
+      "AdviceWorkflow": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 400,
+            "title": "Name",
+            "default": ""
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          }
+        },
+        "type": "object",
+        "title": "AdviceWorkflow"
+      },
+      "Answer": {
+        "properties": {
+          "approve": {
+            "type": "boolean",
+            "title": "Approve"
+          },
+          "all": {
+            "type": "boolean",
+            "title": "All",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "approve"
+        ],
+        "title": "Answer"
+      },
       "AssignRequest": {
         "properties": {
           "conversationUid": {
@@ -172,6 +214,33 @@
           "conversationUid"
         ],
         "title": "AssignRequest"
+      },
+      "BackfillRequest": {
+        "properties": {
+          "collection_uids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collection Uids"
+          },
+          "retry": {
+            "type": "boolean",
+            "title": "Retry",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BackfillRequest"
       },
       "BackgroundTaskResponse": {
         "properties": {
@@ -194,6 +263,59 @@
         "type": "object",
         "title": "BackgroundTaskResponse",
         "description": "Response model returned to an API request that results in a background task\nbeing spawned. E.g. `/api/v1/predict`, the response returns immediately and\nqueues a webhook reponse as a callback once the process has completed.\n\nFields:\n- `status`: int, HTTP status code for the request\n- `message`: str, status response message\n\nInherited:\n- `timestamp`: int, the current UTC datetime in Epoch millis"
+      },
+      "Body_accept_workspace_api_v1_internal_conversations__conversation_uid__workspace_post": {
+        "properties": {
+          "archive": {
+            "type": "string",
+            "format": "binary",
+            "title": "Archive"
+          },
+          "sender_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Sender Uid"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "replaces": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Replaces"
+          },
+          "ml_model_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ml Model Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "archive",
+          "sender_uid",
+          "name",
+          "sha256"
+        ],
+        "title": "Body_accept_workspace_api_v1_internal_conversations__conversation_uid__workspace_post"
       },
       "Body_add_file_upload_to_context_api_v1_conversations_add_context__post": {
         "properties": {
@@ -392,6 +514,20 @@
           "group_key"
         ],
         "title": "Body_add_file_upload_to_context_api_v1_conversations_files__post"
+      },
+      "Body_extract_text_api_v1_extract_text_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_extract_text_api_v1_extract_text_post"
       },
       "Body_init_job_queue_api_v1_documents_init_job_queue_post": {
         "properties": {
@@ -1488,6 +1624,18 @@
             ],
             "title": "Researchcollectionuid"
           },
+          "client": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client"
+          },
           "researchObjective": {
             "anyOf": [
               {
@@ -1534,6 +1682,87 @@
         },
         "type": "object",
         "title": "ChatRequest"
+      },
+      "ClientResult": {
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Nonce"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 1000000,
+            "title": "Content",
+            "default": ""
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ms": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ms"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "applied",
+                  "declined"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision"
+          },
+          "allowed_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "person",
+                  "folder"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allowed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nonce",
+          "ok"
+        ],
+        "title": "ClientResult",
+        "description": "What the owner's desktop app did with a call it was handed: what it\nread (M7a), or for a change (M7b) whether the person applied it, and\nhow it was allowed (`person`: they saw it and applied it; `folder`: they\nlet that folder be edited without asking)."
       },
       "Collection": {
         "properties": {
@@ -1943,6 +2172,25 @@
         "title": "ConversationForkRequest",
         "description": "Fork (branch) a conversation into a new one.\n\ntitle        \u2014 name for the fork; empty \u2192 server generates a fresh\n               summary of the transcript (fallback \"<title> V2\").\nresponse_uid \u2014 branch point: copy messages up to and including this\n               response. None copies the whole conversation.\ntarget_user  \u2014 fork into another user's account (the source stays with\n               the caller). None/self keeps the fork in the caller's."
       },
+      "ConversationSettingsBody": {
+        "properties": {
+          "autoReads": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Autoreads"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ConversationSettingsBody",
+        "description": "A chat's own settings, as its header sets them. Each is optional: what\nis left out stays as it was."
+      },
       "ConversationStartRequest": {
         "properties": {
           "title": {
@@ -2241,6 +2489,38 @@
         ],
         "title": "ConversationUpdateRequest"
       },
+      "CreateFamilyRequest": {
+        "properties": {
+          "document_uids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 2500,
+            "minItems": 1,
+            "title": "Document Uids"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "document_uids"
+        ],
+        "title": "CreateFamilyRequest"
+      },
       "CreateSmartCollectionRequest": {
         "properties": {
           "name": {
@@ -2306,6 +2586,85 @@
         ],
         "title": "CreateSmartCollectionRequest",
         "description": "Request to create a new smart collection watching a filesystem path."
+      },
+      "DecideRequest": {
+        "properties": {
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              }
+            ],
+            "title": "State"
+          },
+          "questions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Questions"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "backend": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Backend"
+          },
+          "feature": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature"
+          },
+          "reference_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "questions"
+        ],
+        "title": "DecideRequest"
       },
       "Deck": {
         "properties": {
@@ -3807,6 +4166,11 @@
               }
             ],
             "title": "Reference Id"
+          },
+          "code_agent": {
+            "type": "boolean",
+            "title": "Code Agent",
+            "default": false
           }
         },
         "type": "object",
@@ -4324,6 +4688,131 @@
         "title": "InlineDocEmbedResponse",
         "description": "Response object for an inline (non-job-queue) document upload which returns\na collection, conversation or None, depending on the `flavorId` flag. A\ndocument list and text splits for each document."
       },
+      "InternalAdviceRequest": {
+        "properties": {
+          "user_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Uid"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/AdviceWorkflow"
+          },
+          "tool": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Tool"
+          },
+          "args": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Args"
+          },
+          "reference_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_uid",
+          "workflow",
+          "tool"
+        ],
+        "title": "InternalAdviceRequest"
+      },
+      "InternalDecideRequest": {
+        "properties": {
+          "user_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Uid"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "items": {},
+                "type": "array"
+              }
+            ],
+            "title": "State"
+          },
+          "questions": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Questions"
+          },
+          "feature": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 60
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feature"
+          },
+          "reference_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_uid",
+          "state",
+          "questions"
+        ],
+        "title": "InternalDecideRequest"
+      },
       "InviteAcceptRequest": {
         "properties": {
           "token": {
@@ -4838,6 +5327,38 @@
           "userUid"
         ],
         "title": "ManualMember"
+      },
+      "MayRead": {
+        "properties": {
+          "user_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Uid"
+          },
+          "file_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "File Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_uid",
+          "file_id"
+        ],
+        "title": "MayRead"
       },
       "McpCollectionUpdate": {
         "properties": {
@@ -5801,6 +6322,11 @@
             "title": "Disablethinking",
             "default": false
           },
+          "codeAgent": {
+            "type": "boolean",
+            "title": "Codeagent",
+            "default": false
+          },
           "minRoleId": {
             "anyOf": [
               {
@@ -6503,6 +7029,53 @@
         },
         "type": "object",
         "title": "Run"
+      },
+      "SaveArtifact": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 5242880,
+            "minLength": 1,
+            "title": "Content"
+          },
+          "responseUid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Responseuid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "title",
+          "content",
+          "responseUid"
+        ],
+        "title": "SaveArtifact"
+      },
+      "ScopeOf": {
+        "properties": {
+          "user_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Uid"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_uid"
+        ],
+        "title": "ScopeOf"
       },
       "SemanticDocumentSearchRequest": {
         "properties": {
@@ -8354,6 +8927,185 @@
         ],
         "title": "SsoCompleteRequest"
       },
+      "StartRun": {
+        "properties": {
+          "conversation_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Conversation Uid"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "expert_uid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expert Uid"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          }
+        },
+        "type": "object",
+        "required": [
+          "conversation_uid",
+          "question"
+        ],
+        "title": "StartRun"
+      },
+      "StartStep": {
+        "properties": {
+          "user_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Uid"
+          },
+          "expert_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Expert Uid"
+          },
+          "instruction": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Instruction"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "output_schema": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Schema"
+          },
+          "budget": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget"
+          },
+          "pipeline_node_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Pipeline Node Run Id"
+          },
+          "conversation_uid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Uid"
+          },
+          "workflow": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Workflow"
+          },
+          "tainted": {
+            "type": "boolean",
+            "title": "Tainted",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_uid",
+          "expert_uid",
+          "instruction",
+          "pipeline_node_run_id",
+          "workflow"
+        ],
+        "title": "StartStep"
+      },
+      "StartUpload": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "size": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Size"
+          },
+          "unpacked": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unpacked"
+          },
+          "files": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Files"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "size",
+          "unpacked",
+          "files",
+          "sha256"
+        ],
+        "title": "StartUpload"
+      },
       "StringListResponse": {
         "properties": {
           "timestamp": {
@@ -9523,6 +10275,164 @@
         ],
         "title": "WebhookRequest",
         "description": "Struct encapsulating a webhook. When the specified event(s) trigger(s),\nPOSTS a JSON encoded WebhookResponse to the callback url, adding the token\nto the `Authorization` response header. `Authorization: bearer TOKEN`\nResponses from this callback are discarded & any errors ignored."
+      },
+      "WorkflowDone": {
+        "properties": {
+          "pipeline_run": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Pipeline Run"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "State"
+          },
+          "output": {
+            "title": "Output"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "tainted": {
+            "type": "boolean",
+            "title": "Tainted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "pipeline_run",
+          "state"
+        ],
+        "title": "WorkflowDone"
+      },
+      "WorkflowMessage": {
+        "properties": {
+          "user_uid": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Uid"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Text"
+          },
+          "workflow": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Workflow"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Run Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_uid",
+          "text",
+          "workflow",
+          "run_id"
+        ],
+        "title": "WorkflowMessage"
+      },
+      "WorkspaceAccepted": {
+        "properties": {
+          "collection_uid": {
+            "type": "string",
+            "title": "Collection Uid"
+          },
+          "job_queue_run_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Queue Run Id"
+          },
+          "folder": {
+            "type": "string",
+            "title": "Folder"
+          },
+          "files": {
+            "type": "integer",
+            "title": "Files"
+          },
+          "unpacked": {
+            "type": "integer",
+            "title": "Unpacked"
+          },
+          "queued": {
+            "type": "integer",
+            "title": "Queued",
+            "default": 0
+          },
+          "skipped_large": {
+            "type": "integer",
+            "title": "Skipped Large",
+            "default": 0
+          },
+          "skipped_type": {
+            "type": "integer",
+            "title": "Skipped Type",
+            "default": 0
+          },
+          "skipped_hidden": {
+            "type": "integer",
+            "title": "Skipped Hidden",
+            "default": 0
+          },
+          "skipped_secret": {
+            "type": "integer",
+            "title": "Skipped Secret",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "collection_uid",
+          "folder",
+          "files",
+          "unpacked"
+        ],
+        "title": "WorkspaceAccepted"
+      },
+      "WorkspaceRemoved": {
+        "properties": {
+          "found": {
+            "type": "boolean",
+            "title": "Found",
+            "default": false
+          },
+          "documents_deleted": {
+            "type": "integer",
+            "title": "Documents Deleted",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "WorkspaceRemoved"
       }
     }
   },
@@ -9957,7 +10867,7 @@
           "Chat"
         ],
         "summary": "Cancel Chat",
-        "description": "Stop a detached generation. Client disconnects no longer cancel the\nmodel (generation is deliberately connection-independent), so the Stop\nbutton calls this to actually halt it. The cancelled task persists its\npartial text and publishes a done event on the conversation stream.",
+        "description": "Stop a detached generation. Client disconnects no longer cancel the\nmodel (generation is deliberately connection-independent), so the Stop\nbutton calls this to actually halt it. The cancelled task persists its\npartial text and publishes a done event on the conversation stream.\n\nOnly someone who may write to the generation's conversation (its owner,\nor a person it is shared with: the rule that let them ask) can stop it;\nanyone else gets the conversation's 404.",
         "operationId": "cancel_chat_api_v1_conversations_chat__response_uid__cancel_post",
         "security": [
           {
@@ -10828,6 +11738,54 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/llm/decide": {
+      "post": {
+        "tags": [
+          "Decisions"
+        ],
+        "summary": "Decide",
+        "operationId": "decide_api_v1_llm_decide_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Decide Api V1 Llm Decide Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OAuth2PasswordBearer": []
+          }
+        ]
       }
     },
     "/api/v1/llm/exec": {

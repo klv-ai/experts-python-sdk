@@ -403,3 +403,83 @@ class TestSessions:
         client, rec = make_client([ok({"revoked": True})])
         client.sessions.revoke("s_abc")
         assert rec.paths[0] == "DELETE /api/v1/public/sessions/s_abc"
+
+
+
+DECISION = {
+    "model": "tev1:0.8b",
+    "backend": "local",
+    "answers": {
+        "kind": {
+            "type": "choice",
+            "choice": "billing",
+            "confidence": 0.98,
+            "probabilities": {"billing": 0.94, "support": 0.04, "sales": 0.02},
+        },
+        "risky": {"type": "noul", "noul": 0.25},
+        "urgency": {
+            "type": "score",
+            "score": 0.33,
+            "legend": {"0": "waiting on money", "1": "a deadline"},
+            "probabilities": {"0": 0.67, "1": 0.33},
+            "confidence": 0.08,
+        },
+    },
+    "usage": {"input_tokens": 159, "output_tokens": 0},
+}
+KIND = {
+    "kind": {
+        "type": "choice",
+        "instructions": "What kind of email?",
+        "criteria": {"billing": "money", "support": "help", "sales": "buying"},
+    }
+}
+
+
+class TestDecide:
+    def test_it_posts_the_case_and_reads_each_answer_by_name(self):
+        client, rec = make_client([httpx.Response(200, json=DECISION)])
+        decision = client.decide("refund INV-2231", KIND, feature="mail_sort")
+        assert rec.paths == ["POST /api/v1/llm/decide"]
+        assert rec.body(0) == {
+            "state": "refund INV-2231",
+            "questions": KIND,
+            "feature": "mail_sort",
+        }
+        assert rec.calls[0].headers["authorization"] == f"Bearer {KEY}"
+        kind = decision["kind"]
+        assert (kind.type, kind.choice) == ("choice", "billing")
+        # The pick's probability, apart from the model's own confidence
+        assert (kind.probability, kind.confidence) == (0.94, 0.98)
+        risky, urgency = decision["risky"], decision["urgency"]
+        assert risky.noul == 0.25 and risky.probability is None
+        assert urgency.score == 0.33 and urgency.legend["1"] == "a deadline"
+        assert decision.model == "tev1:0.8b" and decision.backend == "local"
+        assert decision.input_tokens == 159
+
+    def test_a_model_and_backend_go_only_when_named(self):
+        client, rec = make_client([httpx.Response(200, json=DECISION)])
+        client.decide(
+            {"subject": "x"}, KIND, model="tev1:4b", backend="b1", reference_id="r"
+        )
+        assert rec.body(0) == {
+            "state": {"subject": "x"},
+            "questions": KIND,
+            "model": "tev1:4b",
+            "backend": "b1",
+            "reference_id": "r",
+        }
+
+    def test_a_malformed_question_is_refused_in_words(self):
+        refused = httpx.Response(422, json={"detail": "Question kind is a choice"})
+        client, _ = make_client([refused])
+        with pytest.raises(BadRequestError, match="Question kind is a choice"):
+            client.decide("x", KIND)
+
+    def test_a_model_still_downloading_is_asked_again(self):
+        coming = httpx.Response(503, json={"detail": "tev1:0.8b is downloading"})
+        client, rec = make_client(
+            [coming, httpx.Response(200, json=DECISION)], max_retries=2
+        )
+        assert client.decide("x", KIND)["kind"].choice == "billing"
+        assert len(rec.calls) == 2
