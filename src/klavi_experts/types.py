@@ -553,3 +553,48 @@ class BrowserSession:
     conversation: UUIDStr
     expert_uid: UUIDStr
     expert_name: str = ""
+
+
+@dataclass(slots=True)
+class DecisionAnswer:
+    """One question's answer from a decision model (Experts 1.2)."""
+
+    #: "choice", "noul" (a yes/no as one probability) or "score".
+    type: str
+    #: A choice question's pick.
+    choice: str | None = None
+    #: Each option's probability (a choice question's by option, a score
+    #: question's by the criterion's index as text).
+    probabilities: dict[str, float] = field(default_factory=dict)
+    #: The model's own confidence: one minus the answer's normalised entropy.
+    #: It says how spread the probabilities are, not how likely the pick is;
+    #: for that, read ``probability``.
+    confidence: float | None = None
+    #: A "noul" question's probability of yes.
+    noul: float | None = None
+    #: A "score" question's score, and its criteria by index.
+    score: float | None = None
+    legend: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def probability(self) -> float | None:
+        """The pick's own probability: what a threshold should be set on.
+        None for a question with no pick."""
+        if self.choice is None:
+            return None
+        return self.probabilities.get(self.choice)
+
+
+@dataclass(slots=True)
+class Decision:
+    """A decision model's answers, by question name."""
+
+    model: str
+    answers: dict[str, DecisionAnswer] = field(default_factory=dict)
+    #: The install's backend that answered, when it says.
+    backend: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+    def __getitem__(self, question: str) -> DecisionAnswer:
+        return self.answers[question]

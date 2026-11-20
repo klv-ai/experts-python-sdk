@@ -134,6 +134,32 @@ for hit in experts.knowledge.search("refund policy", collections=[collections[0]
 
 `search()` returns passages, closest first, each with the document it came from. `list_documents(collection=..., search=...)` lists and filters documents by name, title or summary; `delete_document(uid)` removes one. Allow longer than the two-minute default for large files, and much longer for recordings, which are transcribed before they become documents.
 
+## Decisions
+
+Experts 1.2 adds decision models: small models that answer named questions about a case in a fraction of a second, without writing text. Sorting mail, routing a ticket, a second opinion before something is sent. The install's own decision model answers unless you name one.
+
+```python
+decision = experts.decide(
+    "Hi, invoice INV-2231 was charged twice. Could you refund one?",
+    {
+        "kind": {
+            "type": "choice",
+            "instructions": "What kind of email is this?",
+            "criteria": {
+                "billing": "About an invoice, a charge or a refund",
+                "support": "A question about using the product",
+                "sales": "Wants to buy, or asks for a price",
+            },
+        }
+    },
+)
+answer = decision["kind"]
+answer.choice       # "billing"
+answer.probability  # 0.94, the pick's own probability
+```
+
+Set thresholds on `probability`, never on `confidence`: the model's confidence measures how spread its answer is, not how likely its pick is. A `noul` question answers a yes as one probability (`answer.noul`); measure where to cut it on your own cases, since small models seldom reach 0.5. Put the case alone in the state and facts about it in the options' descriptions. Server clients only: the install refuses a browser session.
+
 ## Errors
 
 ```python

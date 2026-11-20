@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "klavi-experts"
-version = "0.2.0"
+version = "0.3.0"
 description = "Official Python SDK for the Klavi Experts API — conversations, streaming, experts, and knowledge."
 readme = "README.md"
 license = "MIT"

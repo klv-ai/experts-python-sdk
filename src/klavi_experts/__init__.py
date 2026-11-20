@@ -39,6 +39,8 @@ from .types import (
     Collection,
     Conversation,
     ConversationWithMessages,
+    Decision,
+    DecisionAnswer,
     DoneEvent,
     Expert,
     KeepaliveEvent,
@@ -57,7 +59,7 @@ from .types import (
     Usage,
 )
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Grouped by what a reader is looking for — clients, then errors, then wire
 # types — rather than alphabetised. RUF022 wants the latter; the grouping
@@ -89,6 +91,8 @@ __all__ = [  # noqa: RUF022
     "Expert",
     "Conversation",
     "ConversationWithMessages",
+    "Decision",
+    "DecisionAnswer",
     "Message",
     "SourceDocument",
     "Usage",
